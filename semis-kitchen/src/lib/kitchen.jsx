@@ -9,6 +9,8 @@ import {
   Soup,
 } from "lucide-react";
 
+const API = "http://localhost:5000/api";
+
 /* ---------------------------------------------------------
    Brand
 --------------------------------------------------------- */
@@ -164,23 +166,34 @@ async function writeStorage(key, value) {
 }
 
 export async function loadInventory() {
-  const v = await readStorage("inventory");
-  if (v) return v;
-  const local = readLocal("inventory");
-  if (local) return local;
-  // Seed default stock from MENU definition
-  const seed = {};
-  MENU.forEach((item) => {
-    if (item.stock != null) {
-      seed[item.id] = { stock: item.stock };
-    }
+  const res = await fetch(`${API}/inventory`);
+  const json = await res.json();
+
+  const inv = {};
+
+  json.data.forEach((item) => {
+    inv[item.menu_item_id] = {
+      stock: item.stock,
+      available: item.available,
+      price: Number(item.selling_price),
+    };
   });
-  return seed;
+
+  return inv;
 }
+
 export async function saveInventory(inv) {
-  await writeStorage("inventory", inv);
-  writeLocal("inventory", inv);
+  for (const id in inv) {
+    await fetch(`${API}/inventory/${id}`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(inv[id]),
+    });
+  }
 }
+
 export async function loadOrders() {
   const v = await readStorage("orders");
   if (v) return v;
