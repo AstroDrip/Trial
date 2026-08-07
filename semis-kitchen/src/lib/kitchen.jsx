@@ -9,7 +9,10 @@ import {
   Soup,
 } from "lucide-react";
 
-const API = "http://localhost:5000/api";
+// API base URL — set VITE_API_URL in production (Vercel env var) to point at
+// your deployed backend (e.g. https://your-api.vercel.app/api). Falls back to
+// local dev server when the env var isn't set.
+const API = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 /* ---------------------------------------------------------
    Brand
@@ -24,43 +27,23 @@ export const CATS = [
   { id: "mains", name: "Biriyani & Curries", icon: Soup },
 ];
 
-export const MENU = [
-// Frozen Snacks (per piece, min 10, +5 each step, default stock 20)
-  { id: "fz-samoosa-chicken", cat: "frozen", name: "Samoosa (Chicken)", unit: "1 Piece", minQty: 10, step: 5, price: 12, stock: 20, img: "images/fz-samoosa-chicken.png" },
-  { id: "fz-samoosa-beef", cat: "frozen", name: "Samoosa (Beef)", unit: "1 Piece", minQty: 10, step: 5, price: 15, stock: 20, img: "images/fz-samoosa-beef.png" },
-  { id: "fz-cutlet-chicken", cat: "frozen", name: "Cutlet (Chicken)", unit: "1 Piece", minQty: 10, step: 5, price: 15, stock: 20, img: "images/fz-cutlet-chicken.png" },
-  { id: "fz-cutlet-beef", cat: "frozen", name: "Cutlet (Beef)", unit: "1 Piece", minQty: 10, step: 5, price: 18, stock: 20, img: "images/fz-cutlet-beef.png" },
-  { id: "fz-unnakaya", cat: "frozen", name: "Unnakaya", unit: "1 Piece", minQty: 10, step: 5, price: 12, stock: 20, img: "images/fz-unnakaya.png" },
-  { id: "fz-kallumakaya-plain", cat: "frozen", name: "Kallumakaya (w/o masala)", unit: "1 Piece", minQty: 10, step: 5, price: 18, stock: 20, img: "images/fz-kallumakaya-plain.png" },
-  { id: "fz-kallumakaya-masala", cat: "frozen", name: "Kallumakaya (w/ masala)", unit: "1 Piece", minQty: 10, step: 5, price: 20, stock: 20, img: "images/fz-kallumakaya-masala.png" },
-  { id: "fz-chicken-roll", cat: "frozen", name: "Chicken Roll", unit: "1 Piece", minQty: 10, step: 5, price: 15, stock: 20, img: "images/fz-chicken-roll.png" },
-  // Fried Snacks (per piece, min 10, +5 each step, default stock 20)
-  { id: "fr-samoosa-chicken", cat: "fried", name: "Samoosa (Chicken)", unit: "1 Piece", minQty: 10, step: 5, price: 15, stock: 20, img: "images/fr-samoosa-chicken.png" },
-  { id: "fr-samoosa-beef", cat: "fried", name: "Samoosa (Beef)", unit: "1 Piece", minQty: 10, step: 5, price: 18, stock: 20, img: "images/fr-samoosa-beef.png" },
-  { id: "fr-cutlet-chicken", cat: "fried", name: "Cutlet (Chicken)", unit: "1 Piece", minQty: 10, step: 5, price: 18, stock: 20, img: "images/fr-cutlet-chicken.png" },
-  { id: "fr-cutlet-beef", cat: "fried", name: "Cutlet (Beef)", unit: "1 Piece", minQty: 10, step: 5, price: 20, stock: 20, img: "images/fr-cutlet-beef.png" },
-  { id: "fr-unnakaya", cat: "fried", name: "Unnakaya", unit: "1 Piece", minQty: 10, step: 5, price: 15, stock: 20, img: "images/fr-unnakaya.png" },
-  { id: "fr-kallumakaya", cat: "fried", name: "Kallumakaya", unit: "1 Piece", minQty: 10, step: 5, price: 22, stock: 20, img: "images/fr-kallumakaya.png" },
-  { id: "fr-chicken-roll", cat: "fried", name: "Chicken Roll", unit: "1 Piece", minQty: 10, step: 5, price: 20, stock: 20, img: "images/fr-chicken-roll.png" },
-  // Mains (per KG, min 1 KG, 0.5 KG increments)
-  { id: "mc-chicken-biriyani", cat: "mains", name: "Chicken Biriyani", unit: "1 KG", minQty: 1, step: 0.5, price: 750, img: "images/mc-chicken-biriyani.png" },
-  { id: "mc-beef-biriyani", cat: "mains", name: "Beef Biriyani", unit: "1 KG", minQty: 1, step: 0.5, price: 800, img: "images/mc-beef-biriyani.png" },
-  { id: "mc-fish-biriyani", cat: "mains", name: "Fish Biriyani", unit: "1 KG", minQty: 1, step: 0.5, price: 1100, seasonal: true, img: "images/mc-fish-biriyani.png" },
-  { id: "mc-mutton-biriyani", cat: "mains", name: "Mutton Biriyani", unit: "1 KG", minQty: 1, step: 0.5, price: 1250, seasonal: true, img: "images/mc-mutton-biriyani.png" },
-  { id: "mc-madhooth", cat: "mains", name: "Madhooth", unit: "1 KG", minQty: 1, step: 0.5, price: 700, img: "images/mc-madhooth.png" },
-  { id: "mc-chicken-curry", cat: "mains", name: "Chicken Curry", unit: "1 KG", minQty: 1, step: 0.5, price: 350, img: "images/mc-chicken-curry.png" },
-  { id: "mc-ginger-chicken", cat: "mains", name: "Ginger Chicken", unit: "1 KG", minQty: 1, step: 0.5, price: 450, img: "images/mc-ginger-chicken.png" },
-  { id: "mc-butter-chicken", cat: "mains", name: "Butter Chicken", unit: "1 KG", minQty: 1, step: 0.5, price: 650, img: "images/mc-butter-chicken.png" },
-  { id: "mc-chilly-chicken", cat: "mains", name: "Chilly Chicken", unit: "1 KG", minQty: 1, step: 0.5, price: 500, img: "images/mc-chilly-chicken.png" },
-  { id: "mc-turkish-chicken", cat: "mains", name: "Turkish Chicken", unit: "1 KG", minQty: 1, step: 0.5, price: 700, img: "images/mc-turkish-chicken.png" },
-  { id: "mc-pepper-chicken", cat: "mains", name: "Pepper Chicken", unit: "1 KG", minQty: 1, step: 0.5, price: 400, img: "images/mc-pepper-chicken.png" },
-  { id: "mc-chicken-65", cat: "mains", name: "Chicken 65", unit: "1 KG", minQty: 1, step: 0.5, price: 650, img: "images/mc-chicken-65.png" },
-  { id: "mc-chicken-stew", cat: "mains", name: "Chicken Stew", unit: "1 KG", minQty: 1, step: 0.5, price: 550, img: "images/mc-chicken-stew.png" },
-  { id: "mc-thai-chicken", cat: "mains", name: "Thai Chicken", unit: "1 KG", minQty: 1, step: 0.5, price: 700, img: "images/mc-thai-chicken.png" },
-  { id: "mc-garlic-chicken", cat: "mains", name: "Garlic Chicken", unit: "1 KG", minQty: 1, step: 0.5, price: 450, img: "images/mc-garlic-chicken.png" },
-  { id: "mc-chicken-fry", cat: "mains", name: "Chicken Fry", unit: "1 KG", minQty: 1, step: 0.5, price: 500, img: "images/mc-chicken-fry.png" },
-  { id: "mc-hummus", cat: "mains", name: "Hummus", unit: "1 KG", minQty: 1, step: 0.5, price: 350, img: "images/mc-hummus.png" },
-];
+export async function loadMenu() {
+  const res = await fetch(`${API}/menu`);
+  const json = await res.json();
+
+  return json.data.map((item) => ({
+    id: item.id,
+    cat: item.cat,
+    name: item.name,
+    unit: item.unit,
+    minQty: Number(item.minQty),
+    step: Number(item.step),
+    price: Number(item.price),
+    stock: Number(item.stock),
+    seasonal: item.seasonal,
+    img: item.img,
+  }));
+}
 
 /* Map image filenames (from src/assets/images/) to their built URLs.
    Upload PNG/JPG files with names matching each menu item's `img` field. */
@@ -192,6 +175,60 @@ export async function saveInventory(inv) {
       body: JSON.stringify(inv[id]),
     });
   }
+}
+
+export async function createOrder(order) {
+  const res = await fetch(`${API}/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(order),
+  });
+  const json = await res.json();
+  return json.data;
+}
+
+export async function fetchOrders() {
+  const res = await fetch(`${API}/orders`);
+  const json = await res.json();
+
+  return json.data.map((o) => ({
+    id: o.id,
+    invoiceId: o.invoice_id,
+    status: o.status,
+    total: Number(o.total),
+    createdAt: new Date(o.created_at).getTime(),
+    customer: {
+      name: o.customer_name,
+      phone: o.customer_phone,
+      address: o.customer_address,
+      mode: o.order_mode,
+      notes: o.notes,
+      location: o.latitude != null ? { lat: o.latitude, lng: o.longitude } : null,
+    },
+    items: o.items.map((i) => ({ id: i.id, name: i.name, qty: Number(i.qty), price: Number(i.price) })),
+  }));
+}
+
+
+export async function deleteOrderApi(id) {
+  await fetch(`${API}/orders/${id}`, { method: "DELETE" });
+}
+
+
+export async function updateOrderStatusApi(id, status) {
+  const res = await fetch(`${API}/orders/${id}/status`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  const json = await res.json();
+  return json.data;
+}
+
+export async function fetchSalesSummary() {
+  const res = await fetch(`${API}/sales/summary`);
+  const json = await res.json();
+  return json.data; // [{ date, orders_count, revenue }]
 }
 
 export async function loadOrders() {

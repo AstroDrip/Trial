@@ -9,15 +9,15 @@ import {
 import {
   FONTS,
   CATS,
-  MENU,
   Logo,
   rupee,
   genId,
   genInvoiceId,
   resolveImg,
+  loadMenu,
   loadInventory,
-  loadOrders,
-  saveOrders,
+  fetchOrders,
+  createOrder,
   loadHeroImages,
   getFolderHeroImages,
 } from "./lib/kitchen.jsx";
@@ -26,7 +26,7 @@ import LocationPicker from "./components/LocationPicker.jsx";
 /* ---------------------------------------------------------
    Customer: Menu + Cart + Checkout
 --------------------------------------------------------- */
-function CustomerApp({ inventory, refreshInventory, orders, refreshOrders, heroImages }) {
+function CustomerApp({ menu, inventory, refreshInventory, orders, refreshOrders, heroImages }) {
   const [tab, setTab] = useState("frozen");
   const [cart, setCart] = useState({});
   const [cartOpen, setCartOpen] = useState(false);
@@ -72,7 +72,7 @@ function CustomerApp({ inventory, refreshInventory, orders, refreshOrders, heroI
 
   const cartLines = Object.entries(cart)
     .map(([id, qty]) => {
-      const base = MENU.find((m) => m.id === id);
+      const base = menu.find((m) => m.id === id);
       if (!base) return null;
       return { ...base, qty, price: priceOf(base) };
     })
@@ -100,9 +100,7 @@ function CustomerApp({ inventory, refreshInventory, orders, refreshOrders, heroI
       status: "pending",
       createdAt: Date.now(),
     };
-    const current = await loadOrders();
-    const next = [order, ...current];
-    await saveOrders(next);
+    await createOrder(order);
     await refreshOrders();
     setSubmitting(false);
     setCart({});
@@ -111,7 +109,7 @@ function CustomerApp({ inventory, refreshInventory, orders, refreshOrders, heroI
     setConfirmedOrder(order);
   };
 
-  const itemsForTab = MENU.filter((m) => m.cat === tab);
+  const itemsForTab = menu.filter((m) => m.cat === tab);
 
   return (
     <div className="min-h-screen bg-green-950 text-stone-100" style={{ fontFamily: "'Work Sans', sans-serif" }}>
@@ -416,12 +414,14 @@ function CustomerApp({ inventory, refreshInventory, orders, refreshOrders, heroI
    Homepage (customer site)
 --------------------------------------------------------- */
 export default function App() {
+  const [menu, setMenu] = useState([]);
   const [inventory, setInventory] = useState({});
   const [orders, setOrders] = useState([]);
   const [heroImages, setHeroImages] = useState([]);
 
+  const refreshMenu = useCallback(async () => setMenu(await loadMenu()), []);
   const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
-  const refreshOrders = useCallback(async () => setOrders(await loadOrders()), []);
+  const refreshOrders = useCallback(async () => setOrders(await fetchOrders()), []);
   const refreshHeroImages = useCallback(async () => {
     const uploaded = await loadHeroImages();
     const merged = uploaded.length > 0 ? uploaded : getFolderHeroImages();
@@ -429,6 +429,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    refreshMenu();
     refreshHeroImages();
     refreshInventory();
     refreshOrders();
@@ -438,10 +439,11 @@ export default function App() {
       refreshOrders();
     }, 4000);
     return () => clearInterval(iv);
-  }, [refreshHeroImages, refreshInventory, refreshOrders]);
+  }, [refreshMenu, refreshHeroImages, refreshInventory, refreshOrders]);
 
   return (
     <CustomerApp
+      menu={menu}
       inventory={inventory}
       refreshInventory={refreshInventory}
       orders={orders}

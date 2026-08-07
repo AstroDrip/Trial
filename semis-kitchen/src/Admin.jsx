@@ -15,18 +15,20 @@ import {
 import {
   FONTS,
   CATS,
-  MENU,
   STATUS,
   ADMIN_CODE,
   Logo,
   StatusPill,
   rupee,
+  loadMenu,
   loadInventory,
   saveInventory,
-  loadOrders,
-  saveOrders,
+  fetchOrders,
+  updateOrderStatusApi,
+  deleteOrderApi,
   loadArchivedOrders,
   saveArchivedOrders,
+  fetchSalesSummary,
 } from "./lib/kitchen.jsx";
 
 /* ---------------------------------------------------------
@@ -42,26 +44,33 @@ export default function Admin() {
   const [invoiceGroup, setInvoiceGroup] = useState("week");
 
   const [inventory, setInventory] = useState({});
+  const [menu, setMenu] = useState([]);
   const [orders, setOrders] = useState([]);
   const [archived, setArchived] = useState([]);
+  const [salesSummary, setSalesSummary] = useState([]);
   const [priceDraft, setPriceDraft] = useState({});
   const [stockDraft, setStockDraft] = useState({});
 
+  const refreshMenu = useCallback(async () => setMenu(await loadMenu()), []);
   const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
-  const refreshOrders = useCallback(async () => setOrders(await loadOrders()), []);
+  const refreshOrders = useCallback(async () => setOrders(await fetchOrders()), []);
   const refreshArchived = useCallback(async () => setArchived(await loadArchivedOrders()), []);
+  const refreshSales = useCallback(async () => setSalesSummary(await fetchSalesSummary()), []);
 
   useEffect(() => {
+    refreshMenu();
     refreshArchived();
     refreshInventory();
     refreshOrders();
+    refreshSales();
     const iv = setInterval(() => {
       refreshArchived();
       refreshInventory();
       refreshOrders();
+      refreshSales();
     }, 4000);
     return () => clearInterval(iv);
-  }, [refreshArchived, refreshInventory, refreshOrders]);
+  }, [refreshMenu, refreshArchived, refreshInventory, refreshOrders, refreshSales]);
 
   const tryUnlock = () => {
     if (code === ADMIN_CODE) {
@@ -72,17 +81,15 @@ export default function Admin() {
     }
   };
 
-  const setOrderStatus = async (id, status) => {
-    const current = await loadOrders();
-    const next = current.map((o) => (o.id === id ? { ...o, status } : o));
-    await saveOrders(next);
+const setOrderStatus = async (id, status) => {
+    const order = orders.find((o) => o.id === id);
+    await updateOrderStatusApi(id, status);
 
     // When accepting an order, decrement stock for each item
-    if (status === "accepted") {
-      const order = current.find((o) => o.id === id);
+    if (status === "accepted" && order) {
       const inv = await loadInventory();
       const updated = { ...inv };
-      (order?.items || []).forEach((i) => {
+      (order.items || []).forEach((i) => {
         if (updated[i.id]) {
           const prev = updated[i.id].stock;
           if (prev != null && prev > 0) {
@@ -139,16 +146,14 @@ export default function Admin() {
 
   // Clear all orders in a status tab (backing them up to archive first)
   const clearTab = async (status) => {
-    const current = await loadOrders();
-    const toClear = current.filter((o) => o.status === status);
-    const remaining = current.filter((o) => o.status !== status);
+    const toClear = orders.filter((o) => o.status === status);
     const arch = await loadArchivedOrders();
     await saveArchivedOrders([...toClear, ...arch]);
-    await saveOrders(remaining);
+    await Promise.all(toClear.map((o) => deleteOrderApi(o.id)));
     await refreshArchived();
     await refreshOrders();
   };
-
+  
   if (!unlocked) {
     return (
       <div className="min-h-screen bg-green-100 flex items-center justify-center p-4" style={{ fontFamily: "'Work Sans', sans-serif" }}>
@@ -462,7 +467,7 @@ export default function Admin() {
               <div key={c.id}>
                 <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-2">{c.name}</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {MENU.filter((m) => m.cat === c.id).map((item) => {
+                  {menu.filter((m) => m.cat === c.id).map((item) => {
                     const available = inventory[item.id]?.available !== false;
                     const currentPrice = inventory[item.id]?.price ?? item.price;
                     const currentStock = inventory[item.id]?.stock ?? "";
@@ -601,7 +606,7 @@ export default function Admin() {
                 {statCard("Week revenue", rupee(weekRevenue))}
               </div>
 
-              <div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm">
+<div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm">
                 <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-3">Items sold (all time)</h3>
                 {topItems.length === 0 && <p className="text-green-800/50 text-sm">No completed orders yet.</p>}
                 <div className="space-y-2">
@@ -609,6 +614,19 @@ export default function Admin() {
                     <div key={name} className="flex items-center justify-between text-sm">
                       <span className="text-green-950">{name}</span>
                       <span className="text-green-800/70">{qty} sold</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm mt-6">
+                <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-3">Daily sales summary</h3>
+                {salesSummary.length === 0 && <p className="text-green-800/50 text-sm">No sales summary data yet.</p>}
+                <div className="space-y-2">
+                  {salesSummary.map((row) => (
+                    <div key={row.date} className="flex items-center justify-between text-sm">
+                      <span className="text-green-950">{new Date(row.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                      <span className="text-green-800/70">{row.orders_count} orders · {rupee(Number(row.revenue))}</span>
                     </div>
                   ))}
                 </div>
