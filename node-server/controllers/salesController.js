@@ -9,3 +9,7 @@ exports.getSalesSummary = async (req, res) => {
     res.status(500).json({ success: false, message: "Failed to fetch sales summary" });
   }
 };
+
+// Re-export the summary upsert so the order flow can populate the daily
+// sales summary when an order is marked completed.
+exports.upsertSummary = salesModel.upsertSummary;

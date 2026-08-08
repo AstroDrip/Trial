@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   ShoppingBag,
   Plus,
@@ -6,19 +6,16 @@ import {
   X,
   Check,
 } from "lucide-react";
-const API = import.meta.env.VITE_API_URL;
 
 import {
   FONTS,
   CATS,
-  Logo,
   rupee,
   genId,
   genInvoiceId,
   resolveImg,
   loadMenu,
   loadInventory,
-  fetchOrders,
   createOrder,
   loadHeroImages,
   getFolderHeroImages,
@@ -28,14 +25,15 @@ import LocationPicker from "./components/LocationPicker.jsx";
 /* ---------------------------------------------------------
    Customer: Menu + Cart + Checkout
 --------------------------------------------------------- */
-function CustomerApp({ menu, inventory, refreshInventory, orders, refreshOrders, heroImages }) {
+function CustomerApp({ menu, inventory, heroImages }) {
   const [tab, setTab] = useState("frozen");
   const [cart, setCart] = useState({});
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState(null);
-  const [form, setForm] = useState({ name: "", phone: "", address: "", notes: "", mode: "Delivery", location: null });
+  const [form, setForm] = useState({ name: "", phone: "", address: "", notes: "", mode: "Delivery", location: null, paymentMethod: "cod" });
   const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
   const [slide, setSlide] = useState(0);
 
   const heroCount = heroImages?.length || 0;
@@ -98,31 +96,35 @@ function CustomerApp({ menu, inventory, refreshInventory, orders, refreshOrders,
         notes: form.notes.trim(),
         mode: form.mode,
         location: form.location || null,
+        paymentMethod: form.paymentMethod,
       },
       status: "pending",
       createdAt: Date.now(),
     };
-    await createOrder(order);
-    await refreshOrders();
+    try {
+      await createOrder(order);
+    } catch (err) {
+      console.error("Failed to place order:", err);
+      setSubmitting(false);
+      setErrorMsg("Sorry, we couldn't place your order. Please check your connection and try again.");
+      return;
+    }
     setSubmitting(false);
+    setErrorMsg("");
     setCart({});
     setCheckoutOpen(false);
     setCartOpen(false);
+    // Reset the delivery form so a new customer's checkout doesn't show the
+    // previous order's name/phone/address/notes/location.
+    setForm((f) => ({ name: "", phone: "", address: "", notes: "", mode: f.mode, location: null, paymentMethod: f.paymentMethod }));
     setConfirmedOrder(order);
   };
 
-  const itemsForTab = menu.filter((m) => m.cat === tab);
+  const itemsForTab = useMemo(() => menu.filter((m) => m.cat === tab), [menu, tab]);
 
   return (
     <div className="min-h-screen bg-green-950 text-stone-100" style={{ fontFamily: "'Work Sans', sans-serif" }}>
       <style>{FONTS}</style>
-
-      {/* Header */}
-      <header className="sticky top-0 z-30 bg-green-950/95 backdrop-blur border-b border-green-900">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <Logo />
-        </div>
-      </header>
 
       {/* Hero */}
       <div className="relative overflow-hidden border-b border-green-900 min-h-[320px] sm:min-h-[380px] flex items-center bg-gradient-to-br from-green-900 to-green-950">
@@ -142,9 +144,15 @@ function CustomerApp({ menu, inventory, refreshInventory, orders, refreshOrders,
         <div className="absolute inset-0 bg-gradient-to-r from-green-950 via-green-950/85 to-green-950/30" />
         <div className="absolute inset-0 bg-gradient-to-t from-green-950 via-transparent to-green-950/40" />
 
-        <div className="relative max-w-5xl mx-auto px-4 py-14 sm:py-16 w-full">
+        <div className="relative max-w-5xl mx-auto px-4 py-10 sm:py-12 w-full">
+          <div
+            className="text-amber-300 tracking-tight uppercase text-4xl sm:text-5xl mb-3"
+            style={{ fontFamily: "'Fraunces', serif", fontWeight: 700 }}
+          >
+            Semi's Kitchen
+          </div>
           <p className="text-amber-400 text-xs tracking-[0.3em] uppercase mb-3">Open 9:00 AM – 9:00 PM</p>
-          <h1 className="text-3xl sm:text-4xl text-stone-50 max-w-xl" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>
+          <h1 className="text-2xl sm:text-3xl text-stone-50 max-w-xl" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>
             Frozen snacks, fried snacks &amp; slow-cooked curries — straight from our kitchen to your door.
           </h1>
         </div>
@@ -167,7 +175,7 @@ function CustomerApp({ menu, inventory, refreshInventory, orders, refreshOrders,
       </div>
 
       {/* Category tabs */}
-      <div className="sticky top-[57px] z-20 bg-green-950/95 backdrop-blur border-b border-green-900">
+      <div className="sticky top-0 z-20 bg-green-950/95 backdrop-blur border-b border-green-900">
         <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto">
           {CATS.map((c) => {
             const Icon = c.icon;
@@ -336,6 +344,23 @@ function CustomerApp({ menu, inventory, refreshInventory, orders, refreshOrders,
                 </button>
               ))}
             </div>
+            <div className="flex gap-2 mb-4">
+              {[
+                { id: "cod", label: "Cash on Delivery" },
+                { id: "upi", label: "UPI" },
+              ].map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, paymentMethod: p.id }))}
+                  className={`flex-1 py-2.5 px-2 rounded-lg text-sm font-medium border ${
+                    form.paymentMethod === p.id ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-800 text-stone-300"
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
             <div className="space-y-3">
               <input
                 placeholder="Full name"
@@ -372,6 +397,9 @@ function CustomerApp({ menu, inventory, refreshInventory, orders, refreshOrders,
               <span className="text-sm">Order total</span>
               <span className="font-semibold text-amber-400">{rupee(cartTotal)}</span>
             </div>
+            {errorMsg && (
+              <p className="text-red-400 text-sm mt-2">{errorMsg}</p>
+            )}
             <button
               disabled={submitting || !form.name.trim() || !form.phone.trim() || (form.mode === "Delivery" && !form.address.trim() && !(form.location?.lat != null && form.location?.lng != null))}
               onClick={submitOrder}
@@ -418,12 +446,10 @@ function CustomerApp({ menu, inventory, refreshInventory, orders, refreshOrders,
 export default function App() {
   const [menu, setMenu] = useState([]);
   const [inventory, setInventory] = useState({});
-  const [orders, setOrders] = useState([]);
   const [heroImages, setHeroImages] = useState([]);
 
   const refreshMenu = useCallback(async () => setMenu(await loadMenu()), []);
   const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
-  const refreshOrders = useCallback(async () => setOrders(await fetchOrders()), []);
   const refreshHeroImages = useCallback(async () => {
     const uploaded = await loadHeroImages();
     const merged = uploaded.length > 0 ? uploaded : getFolderHeroImages();
@@ -434,22 +460,12 @@ export default function App() {
     refreshMenu();
     refreshHeroImages();
     refreshInventory();
-    refreshOrders();
-    const iv = setInterval(() => {
-      refreshHeroImages();
-      refreshInventory();
-      refreshOrders();
-    }, 4000);
-    return () => clearInterval(iv);
-  }, [refreshMenu, refreshHeroImages, refreshInventory, refreshOrders]);
+  }, [refreshMenu, refreshHeroImages, refreshInventory]);
 
   return (
     <CustomerApp
       menu={menu}
       inventory={inventory}
-      refreshInventory={refreshInventory}
-      orders={orders}
-      refreshOrders={refreshOrders}
       heroImages={heroImages}
     />
   );

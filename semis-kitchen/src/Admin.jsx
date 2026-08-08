@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from 'react-router';
 import {
   X,
@@ -11,8 +11,10 @@ import {
   UtensilsCrossed,
   Save,
   FileText,
+  Search,
 } from "lucide-react";
 import {
+  API,
   FONTS,
   CATS,
   STATUS,
@@ -22,13 +24,15 @@ import {
   rupee,
   loadMenu,
   loadInventory,
-  saveInventory,
+  updateInventoryField,
   fetchOrders,
+  fetchArchivedOrders,
+  archiveOrdersApi,
+  decrementStockApi,
   updateOrderStatusApi,
-  deleteOrderApi,
-  loadArchivedOrders,
-  saveArchivedOrders,
+  updatePaymentStatusApi,
   fetchSalesSummary,
+  paymentMethodLabel,
 } from "./lib/kitchen.jsx";
 
 /* ---------------------------------------------------------
@@ -42,6 +46,15 @@ export default function Admin() {
   const [tab, setTab] = useState("pending");
   const [section, setSection] = useState("orders");
   const [invoiceGroup, setInvoiceGroup] = useState("week");
+  // Flexible date-range filtering (all / day / week / month) applied to invoices & sales
+  const [invRange, setInvRange] = useState("all");
+  const [invRefDate, setInvRefDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [invSearch, setInvSearch] = useState("");
+  // Sub-tabs within the invoices & sales sections
+  const [invSub, setInvSub] = useState("list"); // list | payments
+  const [salesSub, setSalesSub] = useState("stats"); // stats | payments
+  // Payments sub-tab (paid / unpaid)
+  const [payTab, setPayTab] = useState("unpaid"); // paid | unpaid
 
   const [inventory, setInventory] = useState({});
   const [menu, setMenu] = useState([]);
@@ -53,8 +66,16 @@ export default function Admin() {
 
   const refreshMenu = useCallback(async () => setMenu(await loadMenu()), []);
   const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
-  const refreshOrders = useCallback(async () => setOrders(await fetchOrders()), []);
-  const refreshArchived = useCallback(async () => setArchived(await loadArchivedOrders()), []);
+  // In-flight optimistic status overrides (orderId -> status). These are merged
+  // into the fetched list so a stale server snapshot (captured while an accept/decline
+  // request is still in flight) can't clobber the optimistic status back to pending.
+  const orderStatusOverrideRef = useRef({});
+  const refreshOrders = useCallback(async () => {
+    const fetched = await fetchOrders();
+    const O = orderStatusOverrideRef.current;
+    setOrders(fetched.map((o) => (O[o.id] ? { ...o, status: O[o.id] } : o)));
+  }, []);
+  const refreshArchived = useCallback(async () => setArchived(await fetchArchivedOrders()), []);
   const refreshSales = useCallback(async () => setSalesSummary(await fetchSalesSummary()), []);
 
   useEffect(() => {
@@ -63,14 +84,57 @@ export default function Admin() {
     refreshInventory();
     refreshOrders();
     refreshSales();
-    const iv = setInterval(() => {
-      refreshArchived();
-      refreshInventory();
-      refreshOrders();
-      refreshSales();
-    }, 4000);
-    return () => clearInterval(iv);
   }, [refreshMenu, refreshArchived, refreshInventory, refreshOrders, refreshSales]);
+
+  // -------------------------------------------------------------------------
+  // Event-driven realtime updates: subscribe to the SSE stream so new orders
+  // and inventory changes appear instantly (no manual refresh / polling).
+  // The EventSource auto-reconnects; missed events are replayed server-side.
+  // We track the last event id in a ref so reconnecting doesn't drop events
+  // and so we don't tear down/recreate the connection on every event.
+  // -------------------------------------------------------------------------
+  const lastEventIdRef = useRef(0);
+  useEffect(() => {
+    if (!unlocked) return;
+    const src = new EventSource(`${API}/events?last=${lastEventIdRef.current}`);
+    src.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data);
+        // Only track numeric SSE ids (the server's BIGSERIAL id). This keeps
+        // the `?last=` query param valid for DB replay on reconnect.
+        if (e.lastEventId) {
+          const parsed = Number(e.lastEventId);
+          if (Number.isFinite(parsed) && parsed > 0) lastEventIdRef.current = parsed;
+        }
+        if (evt.type === "order_created") {
+          refreshOrders();
+          refreshArchived();
+        } else if (evt.type === "inventory_updated") {
+          setInventory((prev) => {
+            const id = evt.payload.menu_item_id;
+            if (!prev[id]) return prev;
+            const cur = prev[id];
+            const next = { ...cur };
+            if (evt.payload.stock != null) next.stock = evt.payload.stock;
+            if (evt.payload.available != null) next.available = evt.payload.available;
+            if (evt.payload.price != null) next.price = Number(evt.payload.price);
+            return { ...prev, [id]: next };
+          });
+        } else if (evt.type === "sales_updated") {
+          refreshSales();
+        }
+      } catch {}
+    };
+    return () => src.close();
+  }, [unlocked, refreshOrders, refreshArchived, refreshSales]);
+
+  const refreshAll = () => {
+    refreshMenu();
+    refreshArchived();
+    refreshInventory();
+    refreshOrders();
+    refreshSales();
+  };
 
   const tryUnlock = () => {
     if (code === ADMIN_CODE) {
@@ -81,35 +145,82 @@ export default function Admin() {
     }
   };
 
-const setOrderStatus = async (id, status) => {
+  const setOrderStatus = async (id, status) => {
     const order = orders.find((o) => o.id === id);
-    await updateOrderStatusApi(id, status);
+    // Register the in-flight override so a stale refresh can't clobber the
+    // optimistic status back to pending while the request is in progress.
+    orderStatusOverrideRef.current = { ...orderStatusOverrideRef.current, [id]: status };
+    // Optimistic local update for instant UI feedback
+    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)));
+    try {
+      await updateOrderStatusApi(id, status);
 
-    // When accepting an order, decrement stock for each item
-    if (status === "accepted" && order) {
-      const inv = await loadInventory();
-      const updated = { ...inv };
-      (order.items || []).forEach((i) => {
-        if (updated[i.id]) {
-          const prev = updated[i.id].stock;
-          if (prev != null && prev > 0) {
-            updated[i.id] = { ...updated[i.id], stock: Math.max(0, prev - i.qty) };
-          }
+      // When accepting an order, decrement stock for each item. This uses an
+      // atomic server-side decrement (single UPDATE), so concurrent accepts
+      // from multiple admins never lose updates (no read-modify-write race).
+      if (status === "accepted" && order) {
+        for (const i of order.items || []) {
+          setInventory((prevInv) => {
+            const cur = prevInv[i.id];
+            if (!cur) return prevInv;
+            return { ...prevInv, [i.id]: { ...cur, stock: Math.max(0, (cur.stock || 0) - i.qty) } };
+          });
+          await decrementStockApi(i.id, i.qty);
         }
-      });
-      await saveInventory(updated);
-      await refreshInventory();
-    }
+      }
 
-    await refreshOrders();
+      // Status change committed to the DB — drop the override so the next
+      // refresh reflects authoritative server state, then re-sync to converge.
+      const O = { ...orderStatusOverrideRef.current };
+      delete O[id];
+      orderStatusOverrideRef.current = O;
+      await refreshOrders();
+    } catch (err) {
+      // Revert on failure
+      const O = { ...orderStatusOverrideRef.current };
+      delete O[id];
+      orderStatusOverrideRef.current = O;
+      setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: order.status } : o)));
+    }
+  };
+
+  const togglePayment = async (id) => {
+    // The order may live in either the active list or the archived list
+    // (old invoices). Find it in whichever array (or both) holds it.
+    const active = orders.find((o) => o.id === id);
+    const arch = archived.find((o) => o.id === id);
+    const order = active || arch;
+    if (!order) return;
+    const prev = order.paymentStatus;
+    const next = prev === "paid" ? "unpaid" : "paid";
+
+    // Optimistic update — apply locally immediately for instant UI feedback.
+    // Update BOTH arrays so archived invoices (shown in the Payments view)
+    // also move paid/unpaid correctly.
+    const patch = (o) => (o.id === id ? { ...o, paymentStatus: next } : o);
+    const revert = (o) => (o.id === id ? { ...o, paymentStatus: prev } : o);
+    setOrders((p) => p.map(patch));
+    setArchived((p) => p.map(patch));
+
+    try {
+      await updatePaymentStatusApi(id, next);
+    } catch (err) {
+      // Revert on failure
+      setOrders((p) => p.map(revert));
+      setArchived((p) => p.map(revert));
+    }
   };
 
   const toggleAvailability = async (itemId) => {
-    const current = await loadInventory();
-    const wasAvailable = current[itemId]?.available !== false;
-    const next = { ...current, [itemId]: { ...current[itemId], available: !wasAvailable } };
-    await saveInventory(next);
-    await refreshInventory();
+    const current = inventory[itemId];
+    const wasAvailable = current?.available !== false;
+    // Optimistic local update for instant feedback
+    setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], available: !wasAvailable } }));
+    try {
+      await updateInventoryField(itemId, { available: !wasAvailable });
+    } catch (err) {
+      setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], available: wasAvailable } }));
+    }
   };
 
   const savePrice = async (itemId) => {
@@ -117,26 +228,35 @@ const setOrderStatus = async (id, status) => {
     if (raw === undefined || raw === "") return;
     const price = Math.max(0, Math.round(Number(raw) * 100) / 100);
     if (!Number.isFinite(price)) return;
-    const current = await loadInventory();
-    const next = { ...current, [itemId]: { ...current[itemId], price } };
-    await saveInventory(next);
-    await refreshInventory();
+    // Optimistic local update for instant feedback
+    setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], price } }));
+    try {
+      await updateInventoryField(itemId, { price });
+    } catch (err) {
+      setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], price: currentPriceOf(itemId) } }));
+    }
     setPriceDraft((d) => {
       const copy = { ...d };
       delete copy[itemId];
       return copy;
     });
   };
+  const currentPriceOf = (itemId) => (inventory[itemId]?.price != null ? inventory[itemId].price : menu.find((m) => m.id === itemId)?.price);
 
   const saveStock = async (itemId) => {
     const raw = stockDraft[itemId];
     if (raw === undefined || raw === "") return;
     const stock = Math.max(0, Number(raw));
     if (!Number.isFinite(stock)) return;
-    const current = await loadInventory();
-    const next = { ...current, [itemId]: { ...current[itemId], stock } };
-    await saveInventory(next);
-    await refreshInventory();
+    const prevStock = inventory[itemId]?.stock ?? "";
+    // Optimistic local update for instant feedback
+    setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], stock } }));
+    try {
+      await updateInventoryField(itemId, { stock });
+    } catch (err) {
+      // Revert to the previous stock value on failure.
+      setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], stock: prevStock } }));
+    }
     setStockDraft((d) => {
       const copy = { ...d };
       delete copy[itemId];
@@ -144,16 +264,16 @@ const setOrderStatus = async (id, status) => {
     });
   };
 
-  // Clear all orders in a status tab (backing them up to archive first)
+  // Clear all orders in a status tab, marking them archived in the shared DB
+  // (so every admin sees the same historical invoices/sales).
   const clearTab = async (status) => {
     const toClear = orders.filter((o) => o.status === status);
-    const arch = await loadArchivedOrders();
-    await saveArchivedOrders([...toClear, ...arch]);
-    await Promise.all(toClear.map((o) => deleteOrderApi(o.id)));
+    if (toClear.length === 0) return;
+    await archiveOrdersApi(toClear.map((o) => o.id));
     await refreshArchived();
     await refreshOrders();
   };
-  
+
   if (!unlocked) {
     return (
       <div className="min-h-screen bg-green-100 flex items-center justify-center p-4" style={{ fontFamily: "'Work Sans', sans-serif" }}>
@@ -190,6 +310,165 @@ const setOrderStatus = async (id, status) => {
   const filtered = orders.filter((o) => o.status === tab).sort((a, b) => b.createdAt - a.createdAt);
   const allInvoiceOrders = [...archived, ...orders];
 
+  /* ---------- Shared date-range helpers ---------- */
+  const fmtDate = (ts) =>
+    new Date(ts).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+
+  // Compute the inclusive [start, end] timestamps for the selected range.
+  const rangeBounds = (range, ref) => {
+    const d = ref ? new Date(ref) : new Date();
+    d.setHours(12, 0, 0, 0); // midday to avoid TZ edge cases
+    const start = new Date(d);
+    const end = new Date(d);
+    if (range === "day") {
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+    } else if (range === "week") {
+      // Monday-start week
+      const day = (d.getDay() + 6) % 7;
+      start.setDate(d.getDate() - day);
+      start.setHours(0, 0, 0, 0);
+      end.setDate(start.getDate() + 6);
+      end.setHours(23, 59, 59, 999);
+    } else if (range === "month") {
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+      end.setMonth(d.getMonth() + 1, 0);
+      end.setHours(23, 59, 59, 999);
+    }
+    return { start: start.getTime(), end: end.getTime() };
+  };
+
+  const inRange = (o) => {
+    if (invRange === "all") return true;
+    const { start, end } = rangeBounds(invRange, invRefDate);
+    return o.createdAt >= start && o.createdAt <= end;
+  };
+
+  // Flexible date-range filter controls (used by both Invoices & Sales)
+  const RangeFilter = (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="flex gap-1 border border-green-300 rounded-lg overflow-hidden bg-white">
+        {[
+          { id: "all", label: "All" },
+          { id: "day", label: "Day" },
+          { id: "week", label: "Week" },
+          { id: "month", label: "Month" },
+        ].map((r) => (
+          <button
+            key={r.id}
+            onClick={() => setInvRange(r.id)}
+            className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+              invRange === r.id ? "bg-amber-400 text-green-950" : "text-green-800 hover:bg-green-50"
+            }`}
+          >
+            {r.label}
+          </button>
+        ))}
+      </div>
+      {invRange !== "all" && (
+        <input
+          type="date"
+          value={invRefDate}
+          onChange={(e) => setInvRefDate(e.target.value)}
+          className="px-3 py-1.5 rounded-lg border border-green-300 bg-white text-sm text-green-950 focus:outline-none focus:ring-2 focus:ring-amber-400"
+        />
+      )}
+    </div>
+  );
+
+  // Shared Payments view: lists paid / unpaid completed orders with their order id
+  const PaymentsView = () => {
+    const base = allInvoiceOrders.filter((o) => o.status === "completed" && inRange(o));
+    const list = base
+      .filter((o) => (o.paymentStatus || "unpaid") === payTab)
+      .sort((a, b) => b.createdAt - a.createdAt);
+    const total = list.reduce((s, o) => s + (o.total || 0), 0);
+    return (
+      <div>
+        <div className="flex gap-2 mb-4">
+          {["unpaid", "paid"].map((p) => {
+            const n = base.filter((o) => (o.paymentStatus || "unpaid") === p).length;
+            return (
+              <button
+                key={p}
+                onClick={() => setPayTab(p)}
+                className={`px-3.5 py-2 rounded-lg text-sm font-medium border ${
+                  payTab === p ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-300 bg-white text-green-800"
+                }`}
+              >
+                {p === "paid" ? "Paid" : "Not Paid"} ({n})
+              </button>
+            );
+          })}
+        </div>
+
+        {list.length === 0 && (
+          <div className="text-center py-12 text-green-800/50">
+            <UtensilsCrossed className="w-8 h-8 mx-auto mb-2 opacity-50" />
+            No {payTab === "paid" ? "paid" : "unpaid"} customers in this range.
+          </div>
+        )}
+
+        <div className="space-y-3">
+          {list.map((o) => (
+            <div key={o.id} className="border border-green-200 bg-white rounded-xl p-4 shadow-sm">
+              <div className="flex flex-wrap justify-between gap-2 items-start mb-2">
+                <div>
+                  <div className="font-mono text-xs text-amber-600">{o.invoiceId || o.id}</div>
+                  <div className="font-mono text-xs text-green-800/50 mt-0.5">Order ID: {o.id}</div>
+                  <div className="text-green-950 font-semibold mt-1">{o.customer.name}</div>
+                  <div className="flex items-center gap-1.5 text-green-800/70 text-xs mt-0.5">
+                    <Phone className="w-3 h-3" /> {o.customer.phone}
+                    <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
+                  </div>
+                  <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
+                </div>
+                <div className="text-right">
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ring-1 ${
+                    (o.paymentStatus || "unpaid") === "paid"
+                      ? "bg-emerald-100 text-emerald-700 ring-emerald-300"
+                      : "bg-red-50 text-red-600 ring-red-200"
+                  }`}>
+                    {(o.paymentStatus || "unpaid") === "paid" ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
+                    {(o.paymentStatus || "unpaid") === "paid" ? "Paid" : "Not paid"}
+                  </span>
+                  <div className="font-semibold text-amber-600 mt-2">{rupee(o.total)}</div>
+                </div>
+              </div>
+              <div className="border-t border-green-100 pt-3 space-y-1">
+                {o.items.map((i) => (
+                  <div key={i.id} className="flex justify-between text-sm text-green-900">
+                    <span>{i.name} × {i.qty}</span>
+                    <span>{rupee(i.price * i.qty)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex justify-end mt-3 pt-3 border-t border-green-100">
+                <button
+                  onClick={() => togglePayment(o.id)}
+                  className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border ${
+                    (o.paymentStatus || "unpaid") === "paid"
+                      ? "border-red-300 text-red-600 hover:bg-red-50"
+                      : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                  }`}
+                >
+                  {(o.paymentStatus || "unpaid") === "paid" ? <X className="w-3.5 h-3.5" /> : <Check className="w-3.5 h-3.5" />}
+                  {(o.paymentStatus || "unpaid") === "paid" ? "Mark unpaid" : "Mark paid"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+        {list.length > 0 && (
+          <p className="text-xs text-green-800/50 mt-3">
+            {list.length} {payTab === "paid" ? "paid" : "unpaid"} order(s) &middot; total {rupee(total)}
+          </p>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-green-100 text-green-950" style={{ fontFamily: "'Work Sans', sans-serif" }}>
       <style>{FONTS}</style>
@@ -199,6 +478,13 @@ const setOrderStatus = async (id, status) => {
           <div className="flex items-center gap-3">
             <span className="text-xs text-green-800/60 uppercase tracking-widest">Kitchen dashboard</span>
             <button
+              onClick={refreshAll}
+              title="Refresh orders, inventory & sales"
+              className="text-[11px] px-2.5 py-1 rounded-full bg-green-100 border border-green-300 text-green-800 hover:text-amber-600"
+            >
+              ↻ Refresh
+            </button>
+            <button
               onClick={() => navigate("/")}
               className="text-[11px] px-2.5 py-1 rounded-full bg-green-100 border border-green-300 text-green-800 hover:text-amber-600"
             >
@@ -206,7 +492,7 @@ const setOrderStatus = async (id, status) => {
             </button>
           </div>
         </div>
-<div className="max-w-5xl mx-auto px-4 flex gap-1">
+        <div className="max-w-5xl mx-auto px-4 flex gap-1">
           {[
             { id: "orders", label: "Orders" },
             { id: "invoices", label: "Invoices" },
@@ -229,7 +515,7 @@ const setOrderStatus = async (id, status) => {
       <main className="max-w-5xl mx-auto px-4 py-6">
         {section === "orders" && (
           <>
-          <div className="flex gap-2 mb-5 overflow-x-auto">
+            <div className="flex gap-2 mb-5 overflow-x-auto">
               {["pending", "accepted", "declined", "completed"].map((t) => (
                 <button
                   key={t}
@@ -269,6 +555,11 @@ const setOrderStatus = async (id, status) => {
                       <div className="flex items-center gap-1.5 text-green-800/70 text-xs mt-0.5">
                         <Phone className="w-3 h-3" /> {o.customer.phone}
                         <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
+                        {paymentMethodLabel(o.paymentMethod) && (
+                          <span className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700">
+                            {paymentMethodLabel(o.paymentMethod)}
+                          </span>
+                        )}
                       </div>
                       {o.customer.mode === "Delivery" && o.customer.address && (
                         <div className="flex items-start gap-1.5 text-green-800/70 text-xs mt-1 max-w-sm min-w-0">
@@ -290,7 +581,22 @@ const setOrderStatus = async (id, status) => {
                         </div>
                       )}
                     </div>
-                    <StatusPill status={o.status} />
+                    <div className="flex gap-2 items-center">
+                      <StatusPill status={o.status} />
+                      {o.status === "accepted" && (
+                        <button
+                          onClick={() => togglePayment(o.id)}
+                          className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border ${
+                            o.paymentStatus === "paid"
+                              ? "bg-emerald-100 text-emerald-700 border-emerald-300"
+                              : "bg-red-50 text-red-600 border-red-200"
+                          }`}
+                        >
+                          {o.paymentStatus === "paid" ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                          {o.paymentStatus === "paid" ? "Paid" : "Not paid"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="border-t border-green-100 pt-3 space-y-1">
                     {o.items.map((i) => (
@@ -336,17 +642,22 @@ const setOrderStatus = async (id, status) => {
           </>
         )}
 
-{section === "invoices" && (() => {
+        {section === "invoices" && (() => {
           const invoiceSource = allInvoiceOrders
-            .filter((o) => o.status === "completed")
+            .filter((o) => o.status === "completed" && inRange(o))
             .sort((a, b) => b.createdAt - a.createdAt);
 
-          const fmtDate = (ts) =>
-            new Date(ts).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+          // Search filter by order id or invoice id
+          const q = invSearch.trim().toLowerCase();
+          const searched = q
+            ? invoiceSource.filter(
+                (o) => (o.id || "").toLowerCase().includes(q) || (o.invoiceId || "").toLowerCase().includes(q)
+              )
+            : invoiceSource;
 
           // Group by day (calendar date)
           const byDay = new Map();
-          invoiceSource.forEach((o) => {
+          searched.forEach((o) => {
             const d = new Date(o.createdAt);
             const key = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
             if (!byDay.has(key)) byDay.set(key, []);
@@ -356,7 +667,7 @@ const setOrderStatus = async (id, status) => {
 
           // Group by week (Mon-Sun)
           const byWeek = new Map();
-          invoiceSource.forEach((o) => {
+          searched.forEach((o) => {
             const d = new Date(o.createdAt);
             const day = (d.getDay() + 6) % 7; // Mon=0 ... Sun=6
             const weekStart = new Date(d);
@@ -380,88 +691,127 @@ const setOrderStatus = async (id, status) => {
 
           return (
             <div>
-              <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <div>
                   <h2 className="text-green-950 text-lg font-semibold" style={{ fontFamily: "'Fraunces', serif" }}>Invoices</h2>
                   <p className="text-green-800/50 text-xs mt-0.5">
-                    {invoiceSource.length} completed {invoiceSource.length === 1 ? "order" : "orders"} &middot; {invoiceGroup === "day" ? "grouped by day" : "grouped by week"}
+                    {searched.length} completed {searched.length === 1 ? "order" : "orders"} &middot; {invoiceGroup === "day" ? "grouped by day" : "grouped by week"}
                   </p>
                 </div>
-                <div className="flex gap-2">
-                  {[
-                    { id: "day", label: "By day" },
-                    { id: "week", label: "By week" },
-                  ].map((g) => (
-                    <button
-                      key={g.id}
-                      onClick={() => setInvoiceGroup(g.id)}
-                      className={`px-3.5 py-2 rounded-lg text-sm font-medium border ${
-                        invoiceGroup === g.id ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-300 bg-white text-green-800"
-                      }`}
-                    >
-                      {g.label}
-                    </button>
-                  ))}
+                <div className="flex flex-wrap items-center gap-2">
+                  {RangeFilter}
+                  <div className="flex gap-2">
+                    {[
+                      { id: "day", label: "By day" },
+                      { id: "week", label: "By week" },
+                    ].map((g) => (
+                      <button
+                        key={g.id}
+                        onClick={() => setInvoiceGroup(g.id)}
+                        className={`px-3.5 py-2 rounded-lg text-sm font-medium border ${
+                          invoiceGroup === g.id ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-300 bg-white text-green-800"
+                        }`}
+                      >
+                        {g.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
-              {groups.length === 0 && (
-                <div className="text-center py-16 text-green-800/50">
-                  <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  No completed orders yet.
-                </div>
-              )}
+              {/* Sub-tabs: List | Payments */}
+              <div className="flex gap-1 mb-4 border-b border-green-200">
+                {[
+                  { id: "list", label: "Invoice list" },
+                  { id: "payments", label: "Payments" },
+                ].map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setInvSub(s.id)}
+                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                      invSub === s.id ? "border-amber-400 text-amber-600" : "border-transparent text-green-800/60 hover:text-green-950"
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
 
-              <div className="space-y-6">
-                {groups.map(([key, list]) => {
-                  const groupTotal = list.reduce((s, o) => s + o.total, 0);
-                  return (
-                    <div key={key}>
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-amber-600 text-sm uppercase tracking-widest">{label(key)}</h3>
-                        <span className="text-xs text-green-800/60">
-                          {list.length} {list.length === 1 ? "invoice" : "invoices"} &middot; {rupee(groupTotal)}
-                        </span>
-                      </div>
-                      <div className="space-y-3">
-                        {list.map((o) => (
-                          <div key={o.id} className="border border-green-200 bg-white rounded-xl p-4 shadow-sm">
-                            <div className="flex flex-wrap justify-between gap-2 items-start mb-3">
-                              <div>
-                                <div className="font-mono text-xs text-amber-600">{o.invoiceId || o.id}</div>
-                                <div className="font-mono text-xs text-green-800/50 mt-0.5">{o.id}</div>
-                                <div className="text-green-950 font-semibold mt-1">{o.customer.name}</div>
-                                <div className="flex items-center gap-1.5 text-green-800/70 text-xs mt-0.5">
-                                  <Phone className="w-3 h-3" /> {o.customer.phone}
-                                  <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
-                                </div>
-                                <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
-                              </div>
-                              <div className="text-right">
-                                <StatusPill status={o.status} />
-                                <div className="font-semibold text-amber-600 mt-2">{rupee(o.total)}</div>
-                              </div>
-                            </div>
-                            <div className="border-t border-green-100 pt-3 space-y-1">
-                              {o.items.map((i) => (
-                                <div key={i.id} className="flex justify-between text-sm text-green-900">
-                                  <span>{i.name} × {i.qty}</span>
-                                  <span>{rupee(i.price * i.qty)}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+              {invSub === "payments" ? (
+                <PaymentsView />
+              ) : (
+                <>
+                  {/* Search box */}
+                  <div className="relative mb-4 max-w-sm">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-green-800/40" />
+                    <input
+                      type="text"
+                      value={invSearch}
+                      onChange={(e) => setInvSearch(e.target.value)}
+                      placeholder="Search by order ID or invoice ID…"
+                      className="w-full bg-white border border-green-300 rounded-lg pl-9 pr-3 py-2 text-sm text-green-950 placeholder-green-800/40 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                    />
+                  </div>
+
+                  {groups.length === 0 && (
+                    <div className="text-center py-16 text-green-800/50">
+                      <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      {q || invRange !== "all" ? "No invoices match your filters." : "No completed orders yet."}
                     </div>
-                  );
-                })}
-              </div>
+                  )}
+
+                  <div className="space-y-6">
+                    {groups.map(([key, list]) => {
+                      const groupTotal = list.reduce((s, o) => s + o.total, 0);
+                      return (
+                        <div key={key}>
+                          <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-amber-600 text-sm uppercase tracking-widest">{label(key)}</h3>
+                            <span className="text-xs text-green-800/60">
+                              {list.length} {list.length === 1 ? "invoice" : "invoices"} &middot; {rupee(groupTotal)}
+                            </span>
+                          </div>
+                          <div className="space-y-3">
+                            {list.map((o) => (
+                              <div key={o.id} className="border border-green-200 bg-white rounded-xl p-4 shadow-sm">
+                                <div className="flex flex-wrap justify-between gap-2 items-start mb-3">
+                                  <div>
+                                    <div className="font-mono text-xs text-amber-600">{o.invoiceId || o.id}</div>
+                                    <div className="font-mono text-xs text-green-800/50 mt-0.5">{o.id}</div>
+                                    <div className="text-green-950 font-semibold mt-1">{o.customer.name}</div>
+                                    <div className="flex items-center gap-1.5 text-green-800/70 text-xs mt-0.5">
+                                      <Phone className="w-3 h-3" /> {o.customer.phone}
+                                      <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
+                                    </div>
+                                    <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
+                                  </div>
+                                  <div className="text-right">
+                                    <StatusPill status={o.status} />
+                                    <div className="font-semibold text-amber-600 mt-2">{rupee(o.total)}</div>
+                                  </div>
+                                </div>
+                                <div className="border-t border-green-100 pt-3 space-y-1">
+                                  {o.items.map((i) => (
+                                    <div key={i.id} className="flex justify-between text-sm text-green-900">
+                                      <span>{i.name} × {i.qty}</span>
+                                      <span>{rupee(i.price * i.qty)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           );
         })()}
 
-{section === "inventory" && (
+        {section === "inventory" && (
           <div className="space-y-6">
             {CATS.map((c) => (
               <div key={c.id}>
@@ -552,9 +902,17 @@ const setOrderStatus = async (id, status) => {
         )}
 
         {section === "sales" && (() => {
-          const sold = allInvoiceOrders.filter((o) => o.status === "completed");
+          const sold = allInvoiceOrders.filter((o) => o.status === "completed" && inRange(o));
 
-          // Aggregate items sold
+          // Range label for the stat section
+          const rangeLabel = invRange === "all"
+            ? "all time"
+            : (() => {
+                const { start, end } = rangeBounds(invRange, invRefDate);
+                return `${fmtDate(start)} – ${fmtDate(end)}`;
+              })();
+
+          // Aggregate items sold within the range
           const itemQty = {};
           sold.forEach((o) => {
             (o.items || []).forEach((i) => {
@@ -562,20 +920,7 @@ const setOrderStatus = async (id, status) => {
             });
           });
 
-          // Today's revenue
-          const startOfToday = new Date();
-          startOfToday.setHours(0, 0, 0, 0);
-          const today = sold.filter((o) => o.createdAt >= startOfToday.getTime());
-          const todayRevenue = today.reduce((s, o) => s + (o.total || 0), 0);
-
-          // Weekly revenue
-          const startOfWeek = new Date();
-          const wd = (startOfWeek.getDay() + 6) % 7;
-          startOfWeek.setDate(startOfWeek.getDate() - wd);
-          startOfWeek.setHours(0, 0, 0, 0);
-          const week = sold.filter((o) => o.createdAt >= startOfWeek.getTime());
-          const weekRevenue = week.reduce((s, o) => s + (o.total || 0), 0);
-
+          const periodRevenue = sold.reduce((s, o) => s + (o.total || 0), 0);
           const topItems = Object.entries(itemQty)
             .sort((a, b) => b[1] - a[1])
             .slice(0, 10);
@@ -590,47 +935,72 @@ const setOrderStatus = async (id, status) => {
 
           return (
             <div>
-              <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <div>
                   <h2 className="text-green-950 text-lg font-semibold" style={{ fontFamily: "'Fraunces', serif" }}>Sales</h2>
                   <p className="text-green-800/50 text-xs mt-0.5">
-                    Based on completed orders
+                    Based on completed orders &middot; {rangeLabel}
                   </p>
                 </div>
+                {RangeFilter}
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-                {statCard("Today's orders", today.length)}
-                {statCard("Today's revenue", rupee(todayRevenue))}
-                {statCard("This week's orders", week.length)}
-                {statCard("Week revenue", rupee(weekRevenue))}
+              {/* Sub-tabs: Stats | Payments */}
+              <div className="flex gap-1 mb-4 border-b border-green-200">
+                {[
+                  { id: "stats", label: "Stats" },
+                  { id: "payments", label: "Payments" },
+                ].map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setSalesSub(s.id)}
+                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                      salesSub === s.id ? "border-amber-400 text-amber-600" : "border-transparent text-green-800/60 hover:text-green-950"
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
               </div>
 
-<div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm">
-                <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-3">Items sold (all time)</h3>
-                {topItems.length === 0 && <p className="text-green-800/50 text-sm">No completed orders yet.</p>}
-                <div className="space-y-2">
-                  {topItems.map(([name, qty]) => (
-                    <div key={name} className="flex items-center justify-between text-sm">
-                      <span className="text-green-950">{name}</span>
-                      <span className="text-green-800/70">{qty} sold</span>
+              {salesSub === "payments" ? (
+                <PaymentsView />
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                    {statCard("Orders", sold.length)}
+                    {statCard("Revenue", rupee(periodRevenue))}
+                    {statCard("Paid", rupee(sold.filter((o) => o.paymentStatus === "paid").reduce((s, o) => s + (o.total || 0), 0)))}
+                    {statCard("Unpaid", rupee(sold.filter((o) => o.paymentStatus !== "paid").reduce((s, o) => s + (o.total || 0), 0)))}
+                  </div>
+
+                  <div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm">
+                    <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-3">Items sold ({rangeLabel})</h3>
+                    {topItems.length === 0 && <p className="text-green-800/50 text-sm">No completed orders in this range.</p>}
+                    <div className="space-y-2">
+                      {topItems.map(([name, qty]) => (
+                        <div key={name} className="flex items-center justify-between text-sm">
+                          <span className="text-green-950">{name}</span>
+                          <span className="text-green-800/70">{qty} sold</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
 
-              <div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm mt-6">
-                <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-3">Daily sales summary</h3>
-                {salesSummary.length === 0 && <p className="text-green-800/50 text-sm">No sales summary data yet.</p>}
-                <div className="space-y-2">
-                  {salesSummary.map((row) => (
-                    <div key={row.date} className="flex items-center justify-between text-sm">
-                      <span className="text-green-950">{new Date(row.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
-                      <span className="text-green-800/70">{row.orders_count} orders · {rupee(Number(row.revenue))}</span>
+                  <div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm mt-6">
+                    <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-3">Daily sales summary</h3>
+                    {salesSummary.length === 0 && <p className="text-green-800/50 text-sm">No sales summary data yet.</p>}
+                    <div className="space-y-2">
+                      {salesSummary.map((row) => (
+                        <div key={row.date} className="flex items-center justify-between text-sm">
+                          <span className="text-green-950">{new Date(row.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
+                          <span className="text-green-800/70">{row.orders_count} orders · {rupee(Number(row.revenue))}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </div>
+                  </div>
+                </>
+              )}
             </div>
           );
         })()}

@@ -1,14 +1,16 @@
-# Deployment Prep TODO
+# Bug fixes
 
-- [x] Scan repo & understand architecture
-- [x] 1. Frontend: API URL via env var (kitchen.jsx)
-- [x] 1b. Frontend: add .env.example
-- [x] 2. Backend: restructure for Vercel serverless (app.js, api/index.js, vercel.json)
-- [x] 3. Backend: ALLOWED_ORIGINS via env (in app.js)
-- [x] 4. Backend: add .env.example
-- [x] 5. Wire up sales_summary (model, controller, routes, server, Admin.jsx)
-- [x] 6. Neon integration (db.js pooling tweak)
-- [x] Backend syntax verified (all .js files pass `node --check`)
-- [x] Frontend build verified (`npm run build` succeeds)
+## Plan
+- [x] Scan code & identify bugs
+- [x] Fix `orderController.js` createOrder to pass `paymentStatus` through
+- [x] Fix `App.jsx` submitOrder error handling (reset `submitting`, show error)
+- [x] Fix `Admin.jsx` saveStock revert to restore previous stock value
+- [x] Fix `utils/events.js` in-memory replay fallback for DB-down events
+- [x] Clean up unused imports/vars in `App.jsx`
+- [x] Verify: frontend build (`npm run build`) passes; backend syntax checks pass
 
-All deployment-prep changes are complete and verified!
+## Payment method column rename (paymet)
+- [x] `orderModel.js`: SELECT `o.paymet AS payment_method`; INSERT into `paymet` column
+- [x] `sales_summary.sql`: migration now creates `paymet` column (was `payment_method`)
+- [x] Frontend `mapOrder` unchanged (reads `payment_method`, still aliased from `paymet`)
+- [x] Verify: backend `node --check` passes

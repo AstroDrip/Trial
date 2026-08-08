@@ -1,5 +1,4 @@
 import {
-  ChefHat,
   Clock,
   CheckCircle2,
   XCircle,
@@ -12,7 +11,7 @@ import {
 // API base URL — set VITE_API_URL in production (Vercel env var) to point at
 // your deployed backend (e.g. https://your-api.vercel.app/api). Falls back to
 // local dev server when the env var isn't set.
-const API = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+export const API = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 /* ---------------------------------------------------------
    Brand
@@ -27,6 +26,22 @@ export const CATS = [
   { id: "mains", name: "Biriyani & Curries", icon: Soup },
 ];
 
+/* Reformat item names to remove parentheses, e.g. "Cutlet (Beef)" -> "Beef Cutlet",
+   "Kallumakaya (w/ masala)" -> "Masala Kallumakaya",
+   "Kallumakaya (w/o masala)" -> "Plain Kallumakaya". */
+function formatItemName(name) {
+  if (!name) return name;
+  const m = name.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
+  if (!m) return name.trim();
+  const base = m[1].trim();
+  const variant = m[2].trim();
+  let prefix = variant;
+  if (/^w\/\s*masala$/i.test(variant)) prefix = "Masala";
+  else if (/^w\/o\s*masala$/i.test(variant)) prefix = "Plain";
+  else prefix = variant.replace(/\bw\/\b/g, "with");
+  return `${prefix} ${base}`.trim();
+}
+
 export async function loadMenu() {
   const res = await fetch(`${API}/menu`);
   const json = await res.json();
@@ -34,7 +49,7 @@ export async function loadMenu() {
   return json.data.map((item) => ({
     id: item.id,
     cat: item.cat,
-    name: item.name,
+    name: formatItemName(item.name),
     unit: item.unit,
     minQty: Number(item.minQty),
     step: Number(item.step),
@@ -52,14 +67,72 @@ const MENU_IMAGES = import.meta.glob("/src/assets/images/*", {
   query: "?url",
   import: "default",
 });
+
+/* Fallback mapping: fried & frozen snacks share the same photo. When a menu
+   item's exact image file isn't present, fall back to the matching photo
+   that is available in src/assets/images/. */
+const IMAGE_FALLBACK = {
+  /* Fried snacks (fr-*) */
+  "fr-chicken-roll.png": "fr-ChickenRoll.jpeg",
+  "fr-cutlet-beef.png": "fr-cutlet.jpeg",
+  "fr-cutlet-chicken.png": "fr-cutlet.jpeg",
+  "fr-kallumakaya.png": "fr-Kallumakaya.jpeg",
+  "fr-samoosa-beef.png": "fr-samoosa.png",
+  "fr-samoosa-chicken.png": "fr-samoosa.png",
+  "fr-unnakaya.png": "fr-Unnakaya.jpeg",
+  /* Frozen snacks (fz-*) — 6 new photos */
+  "fz-chicken-roll.png": "fz-ChickenRoll.jpeg",
+  "fz-cutlet-beef.png": "fz-Cutlet.jpeg",
+  "fz-cutlet-chicken.png": "fz-Cutlet.jpeg",
+  "fz-kallumakaya-masala.png": "fz-Masala-Kallumakaya.jpeg",
+  "fz-kallumakaya-plain.png": "fz-Plain-Kallumakaya.jpeg",
+  "fz-samoosa-beef.png": "fz-Samoosa.jpeg",
+  "fz-samoosa-chicken.png": "fz-Samoosa.jpeg",
+  "fz-unnakaya.png": "fz-Unnakaya.jpeg",
+  /* Biriyanis & curries (mains) — match menu png refs to the uploaded photos */
+  "mc-beef-biriyani.png": "beef-biryani.jpeg",
+  "mc-butter-chicken.png": "butter-chicken.jpeg",
+  "mc-chicken-65.png": "chicken-65.jpeg",
+  "mc-chicken-biriyani.png": "chicken-biryani.jpeg",
+  "mc-chicken-curry.png": "chicken-curry.jpeg",
+  "mc-chicken-fry.png": "chicken-fry.jpeg",
+  "mc-chicken-stew.png": "chicken-stew.jpeg",
+  "mc-chilly-chicken.png": "chilly-chicken.jpeg",
+  "mc-fish-biriyani.png": "fish-biryani.jpeg",
+  "mc-garlic-chicken.png": "garlic-chicken.jpeg",
+  "mc-ginger-chicken.png": "ginger-chicken.jpeg",
+  "mc-hummus.png": "hummus.jpeg",
+  "mc-madhooth.png": "madhooth.jpeg",
+  "mc-mutton-biriyani.png": "mutton-biryani.jpeg",
+  "mc-pepper-chicken.png": "pepper-chicken.jpeg",
+  "mc-thai-chicken.png": "thai-chicken.jpeg",
+  "mc-turkish-chicken.png": "turkish-chicken.jpeg",
+};
+
+const imgCache = new Map();
 export function resolveImg(img) {
   if (!img) return undefined;
-  const key = `/src/assets/images/${img.replace(/^images\//, "")}`;
-  return MENU_IMAGES[key];
+  if (imgCache.has(img)) return imgCache.get(img);
+  const clean = img.replace(/^images\//, "");
+  const direct = MENU_IMAGES[`/src/assets/images/${clean}`];
+  if (direct) {
+    imgCache.set(img, direct);
+    return direct;
+  }
+  const fallbackName = IMAGE_FALLBACK[clean];
+  if (fallbackName) {
+    const resolved = MENU_IMAGES[`/src/assets/images/${fallbackName}`];
+    imgCache.set(img, resolved);
+    return resolved;
+  }
+  imgCache.set(img, undefined);
+  return undefined;
 }
 
-/* Hero images: auto-detect any hero*.png/jpg/webp dropped into src/assets/images/ */
-const HERO_IMAGES = import.meta.glob("/src/assets/images/hero*", {
+/* Hero images: auto-detect any hero* / Hero-1* image dropped into src/assets/images/.
+   Matches lowercase "hero..." and uppercase "Hero-1 ..." so the slideshow picks
+   up every uploaded file regardless of naming/case. */
+const HERO_IMAGES = import.meta.glob("/src/assets/images/[Hh]ero*", {
   eager: true,
   query: "?url",
   import: "default",
@@ -91,30 +164,6 @@ export function genInvoiceId() {
   const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
   return "INV-" + ymd + "-" + rand;
 }
-export function compressImage(file, maxW = 1200, quality = 0.75) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
-        const scale = Math.min(1, maxW / img.width);
-        const w = Math.max(1, Math.round(img.width * scale));
-        const h = Math.max(1, Math.round(img.height * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, w, h);
-        resolve(canvas.toDataURL("image/jpeg", quality));
-      };
-      img.onerror = () => reject(new Error("Load failed"));
-      img.src = reader.result;
-    };
-    reader.onerror = () => reject(new Error("Read failed"));
-    reader.readAsDataURL(file);
-  });
-}
-
 /* ---------------------------------------------------------
    Storage helpers (shared, so admin + customers see the same data)
    Uses window.storage when available, otherwise falls back to
@@ -128,12 +177,6 @@ function readLocal(key) {
     return null;
   }
 }
-function writeLocal(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {}
-}
-
 async function readStorage(key) {
   try {
     const r = await window.storage.get(key, true);
@@ -141,11 +184,6 @@ async function readStorage(key) {
   } catch {
     return null;
   }
-}
-async function writeStorage(key, value) {
-  try {
-    await window.storage.set(key, JSON.stringify(value), true);
-  } catch {}
 }
 
 export async function loadInventory() {
@@ -165,36 +203,54 @@ export async function loadInventory() {
   return inv;
 }
 
-export async function saveInventory(inv) {
-  for (const id in inv) {
-    await fetch(`${API}/inventory/${id}`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(inv[id]),
-    });
-  }
+/* Field-level inventory update — sends only the changed field(s) so concurrent
+   admins editing different fields (price vs stock vs availability) don't
+   overwrite each other's changes. */
+export async function updateInventoryField(id, patch) {
+  const res = await fetch(`${API}/inventory/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const json = await res.json();
+  return json.data;
 }
 
 export async function createOrder(order) {
   const res = await fetch(`${API}/orders`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(order),
+    body: JSON.stringify({ ...order, paymentStatus: order.paymentStatus || "unpaid" }),
   });
   const json = await res.json();
   return json.data;
 }
 
-export async function fetchOrders() {
-  const res = await fetch(`${API}/orders`);
+export async function updatePaymentStatusApi(id, paymentStatus) {
+  const res = await fetch(`${API}/orders/${id}/payment`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paymentStatus }),
+  });
   const json = await res.json();
+  return json.data;
+}
 
-  return json.data.map((o) => ({
+/* Map a payment-method code to its display label */
+export function paymentMethodLabel(code) {
+  if (!code) return null;
+  const map = { cod: "Cash on Delivery", upi: "UPI" };
+  return map[code] || code;
+}
+
+/* Shared mapper: raw API order row -> frontend order object. */
+function mapOrder(o) {
+  return {
     id: o.id,
     invoiceId: o.invoice_id,
     status: o.status,
+    paymentStatus: o.payment_status || "unpaid",
+    paymentMethod: o.payment_method || "cod",
     total: Number(o.total),
     createdAt: new Date(o.created_at).getTime(),
     customer: {
@@ -205,8 +261,14 @@ export async function fetchOrders() {
       notes: o.notes,
       location: o.latitude != null ? { lat: o.latitude, lng: o.longitude } : null,
     },
-    items: o.items.map((i) => ({ id: i.id, name: i.name, qty: Number(i.qty), price: Number(i.price) })),
-  }));
+    items: o.items.map((i) => ({ id: i.id, name: formatItemName(i.name), qty: Number(i.qty), price: Number(i.price) })),
+  };
+}
+
+export async function fetchOrders() {
+  const res = await fetch(`${API}/orders`);
+  const json = await res.json();
+  return json.data.map(mapOrder);
 }
 
 
@@ -214,6 +276,35 @@ export async function deleteOrderApi(id) {
   await fetch(`${API}/orders/${id}`, { method: "DELETE" });
 }
 
+/* Fetch archived (backed-up) orders from the shared database. This replaces
+   the old per-browser localStorage archive so every admin sees identical data. */
+export async function fetchArchivedOrders() {
+  const res = await fetch(`${API}/orders/archived`);
+  const json = await res.json();
+  return json.data.map(mapOrder);
+}
+
+/* Mark a set of orders as archived in the shared database. */
+export async function archiveOrdersApi(ids) {
+  const res = await fetch(`${API}/orders/archive`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  const json = await res.json();
+  return json.data;
+}
+
+/* Atomic, concurrency-safe stock decrement (no read-modify-write race). */
+export async function decrementStockApi(id, qty) {
+  const res = await fetch(`${API}/inventory/${id}/decrement`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ qty }),
+  });
+  const json = await res.json();
+  return json.data;
+}
 
 export async function updateOrderStatusApi(id, status) {
   const res = await fetch(`${API}/orders/${id}/status`, {
@@ -231,36 +322,10 @@ export async function fetchSalesSummary() {
   return json.data; // [{ date, orders_count, revenue }]
 }
 
-export async function loadOrders() {
-  const v = await readStorage("orders");
-  if (v) return v;
-  return readLocal("orders") ?? [];
-}
-export async function saveOrders(orders) {
-  await writeStorage("orders", orders);
-  writeLocal("orders", orders);
-}
 export async function loadHeroImages() {
   const v = await readStorage("heroImages");
   if (v) return v;
   return readLocal("heroImages") ?? [];
-}
-export async function saveHeroImages(images) {
-  await writeStorage("heroImages", images);
-  writeLocal("heroImages", images);
-}
-
-/* Archived (backed-up) orders: completed & declined orders are moved here
-   so the active orders list can be cleared for a fresh start while the
-   invoices & sales sections keep the historical records. */
-export async function loadArchivedOrders() {
-  const v = await readStorage("archivedOrders");
-  if (v) return v;
-  return readLocal("archivedOrders") ?? [];
-}
-export async function saveArchivedOrders(orders) {
-  await writeStorage("archivedOrders", orders);
-  writeLocal("archivedOrders", orders);
 }
 
 /* ---------------------------------------------------------
@@ -269,19 +334,14 @@ export async function saveArchivedOrders(orders) {
 export function Logo({ size = "md" }) {
   const big = size === "lg";
   return (
-    <div className="flex items-center gap-2.5">
-      <div className={`${big ? "w-11 h-11" : "w-9 h-9"} rounded-full bg-amber-400 flex items-center justify-center shrink-0`}>
-        <ChefHat className={`${big ? "w-6 h-6" : "w-5 h-5"} text-green-950`} strokeWidth={2.2} />
+    <div className="leading-none">
+      <div
+        className={`${big ? "text-4xl" : "text-3xl"} text-amber-300 tracking-tight uppercase`}
+        style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}
+      >
+        Semi's Kitchen
       </div>
-      <div className="leading-none">
-        <div
-          className={`${big ? "text-3xl" : "text-xl"} text-amber-300 tracking-tight`}
-          style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}
-        >
-          Semi's Kitchen
-        </div>
-        {big && <div className="text-stone-400 text-xs tracking-[0.2em] uppercase mt-1">Malabar snacks &amp; curries, made to order</div>}
-      </div>
+      {big && <div className="text-stone-400 text-xs tracking-[0.2em] uppercase mt-1">Malabar snacks &amp; curries, made to order</div>}
     </div>
   );
 }
