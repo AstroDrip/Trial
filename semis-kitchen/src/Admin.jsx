@@ -44,8 +44,9 @@ export default function Admin() {
   const [code, setCode] = useState("");
   const [error, setError] = useState(false);
   const [tab, setTab] = useState("pending");
-  const [section, setSection] = useState("orders");
-  const [invoiceGroup, setInvoiceGroup] = useState("week");
+const [section, setSection] = useState("orders");
+  const [invoiceGroup, setInvoiceGroup] = useState("recent"); // recent | day | week
+  const [salesGroup, setSalesGroup] = useState("day"); // day | week
   // Flexible date-range filtering (all / day / week / month) applied to invoices & sales
   const [invRange, setInvRange] = useState("all");
   const [invRefDate, setInvRefDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -310,9 +311,16 @@ export default function Admin() {
   const filtered = orders.filter((o) => o.status === tab).sort((a, b) => b.createdAt - a.createdAt);
   const allInvoiceOrders = [...archived, ...orders];
 
-  /* ---------- Shared date-range helpers ---------- */
+/* ---------- Shared date-range helpers ---------- */
   const fmtDate = (ts) =>
     new Date(ts).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+
+  const weekLabel = (ts) => {
+    const start = new Date(ts);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return `${fmtDate(start.getTime())} – ${fmtDate(end.getTime())}`;
+  };
 
   // Compute the inclusive [start, end] timestamps for the selected range.
   const rangeBounds = (range, ref) => {
@@ -679,35 +687,42 @@ export default function Admin() {
           });
           const weeks = Array.from(byWeek.entries()).sort((a, b) => b[0] - a[0]);
 
-          const weekLabel = (ts) => {
+const weekLabel = (ts) => {
             const start = new Date(ts);
             const end = new Date(start);
             end.setDate(start.getDate() + 6);
             return `${fmtDate(start.getTime())} – ${fmtDate(end.getTime())}`;
           };
 
-          const groups = invoiceGroup === "day" ? days : weeks;
+// Default view: flat list of all invoices sorted newest-first.
+          // Toggling "By day"/"By week" groups them; toggling the active one
+          // again returns to the flat "recent" list.
+          const groups = invoiceGroup === "day" ? days : invoiceGroup === "week" ? weeks : null;
           const label = invoiceGroup === "day" ? fmtDate : weekLabel;
+
+          const toggleGroup = (g) => {
+            setInvoiceGroup((cur) => (cur === g ? "recent" : g));
+          };
 
           return (
             <div>
               <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <div>
                   <h2 className="text-green-950 text-lg font-semibold" style={{ fontFamily: "'Fraunces', serif" }}>Invoices</h2>
-                  <p className="text-green-800/50 text-xs mt-0.5">
-                    {searched.length} completed {searched.length === 1 ? "order" : "orders"} &middot; {invoiceGroup === "day" ? "grouped by day" : "grouped by week"}
+<p className="text-green-800/50 text-xs mt-0.5">
+                    {searched.length} completed {searched.length === 1 ? "order" : "orders"} &middot; {invoiceGroup === "day" ? "grouped by day" : invoiceGroup === "week" ? "grouped by week" : "newest first"}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {RangeFilter}
                   <div className="flex gap-2">
-                    {[
+{[
                       { id: "day", label: "By day" },
                       { id: "week", label: "By week" },
                     ].map((g) => (
                       <button
                         key={g.id}
-                        onClick={() => setInvoiceGroup(g.id)}
+                        onClick={() => toggleGroup(g.id)}
                         className={`px-3.5 py-2 rounded-lg text-sm font-medium border ${
                           invoiceGroup === g.id ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-300 bg-white text-green-800"
                         }`}
@@ -753,58 +768,91 @@ export default function Admin() {
                     />
                   </div>
 
-                  {groups.length === 0 && (
+{((invoiceGroup !== "recent" && groups.length === 0) || (invoiceGroup === "recent" && searched.length === 0)) && (
                     <div className="text-center py-16 text-green-800/50">
                       <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
                       {q || invRange !== "all" ? "No invoices match your filters." : "No completed orders yet."}
                     </div>
                   )}
 
-                  <div className="space-y-6">
-                    {groups.map(([key, list]) => {
-                      const groupTotal = list.reduce((s, o) => s + o.total, 0);
-                      return (
-                        <div key={key}>
-                          <div className="flex items-center justify-between mb-2">
-                            <h3 className="text-amber-600 text-sm uppercase tracking-widest">{label(key)}</h3>
-                            <span className="text-xs text-green-800/60">
-                              {list.length} {list.length === 1 ? "invoice" : "invoices"} &middot; {rupee(groupTotal)}
-                            </span>
+                  {invoiceGroup === "recent" ? (
+                    <div className="space-y-3">
+                      {searched.map((o) => (
+                        <div key={o.id} className="border border-green-200 bg-white rounded-xl p-4 shadow-sm">
+                          <div className="flex flex-wrap justify-between gap-2 items-start mb-3">
+                            <div>
+                              <div className="font-mono text-xs text-amber-600">{o.invoiceId || o.id}</div>
+                              <div className="font-mono text-xs text-green-800/50 mt-0.5">{o.id}</div>
+                              <div className="text-green-950 font-semibold mt-1">{o.customer.name}</div>
+                              <div className="flex items-center gap-1.5 text-green-800/70 text-xs mt-0.5">
+                                <Phone className="w-3 h-3" /> {o.customer.phone}
+                                <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
+                              </div>
+                              <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
+                            </div>
+                            <div className="text-right">
+                              <StatusPill status={o.status} />
+                              <div className="font-semibold text-amber-600 mt-2">{rupee(o.total)}</div>
+                            </div>
                           </div>
-                          <div className="space-y-3">
-                            {list.map((o) => (
-                              <div key={o.id} className="border border-green-200 bg-white rounded-xl p-4 shadow-sm">
-                                <div className="flex flex-wrap justify-between gap-2 items-start mb-3">
-                                  <div>
-                                    <div className="font-mono text-xs text-amber-600">{o.invoiceId || o.id}</div>
-                                    <div className="font-mono text-xs text-green-800/50 mt-0.5">{o.id}</div>
-                                    <div className="text-green-950 font-semibold mt-1">{o.customer.name}</div>
-                                    <div className="flex items-center gap-1.5 text-green-800/70 text-xs mt-0.5">
-                                      <Phone className="w-3 h-3" /> {o.customer.phone}
-                                      <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
-                                    </div>
-                                    <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
-                                  </div>
-                                  <div className="text-right">
-                                    <StatusPill status={o.status} />
-                                    <div className="font-semibold text-amber-600 mt-2">{rupee(o.total)}</div>
-                                  </div>
-                                </div>
-                                <div className="border-t border-green-100 pt-3 space-y-1">
-                                  {o.items.map((i) => (
-                                    <div key={i.id} className="flex justify-between text-sm text-green-900">
-                                      <span>{i.name} × {i.qty}</span>
-                                      <span>{rupee(i.price * i.qty)}</span>
-                                    </div>
-                                  ))}
-                                </div>
+                          <div className="border-t border-green-100 pt-3 space-y-1">
+                            {o.items.map((i) => (
+                              <div key={i.id} className="flex justify-between text-sm text-green-900">
+                                <span>{i.name} × {i.qty}</span>
+                                <span>{rupee(i.price * i.qty)}</span>
                               </div>
                             ))}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="space-y-6">
+                      {groups.map(([key, list]) => {
+                        const groupTotal = list.reduce((s, o) => s + o.total, 0);
+                        return (
+                          <div key={key}>
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="text-amber-600 text-sm uppercase tracking-widest">{label(key)}</h3>
+                              <span className="text-xs text-green-800/60">
+                                {list.length} {list.length === 1 ? "invoice" : "invoices"} &middot; {rupee(groupTotal)}
+                              </span>
+                            </div>
+                            <div className="space-y-3">
+                              {list.map((o) => (
+                                <div key={o.id} className="border border-green-200 bg-white rounded-xl p-4 shadow-sm">
+                                  <div className="flex flex-wrap justify-between gap-2 items-start mb-3">
+                                    <div>
+                                      <div className="font-mono text-xs text-amber-600">{o.invoiceId || o.id}</div>
+                                      <div className="font-mono text-xs text-green-800/50 mt-0.5">{o.id}</div>
+                                      <div className="text-green-950 font-semibold mt-1">{o.customer.name}</div>
+                                      <div className="flex items-center gap-1.5 text-green-800/70 text-xs mt-0.5">
+                                        <Phone className="w-3 h-3" /> {o.customer.phone}
+                                        <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
+                                      </div>
+                                      <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
+                                    </div>
+                                    <div className="text-right">
+                                      <StatusPill status={o.status} />
+                                      <div className="font-semibold text-amber-600 mt-2">{rupee(o.total)}</div>
+                                    </div>
+                                  </div>
+                                  <div className="border-t border-green-100 pt-3 space-y-1">
+                                    {o.items.map((i) => (
+                                      <div key={i.id} className="flex justify-between text-sm text-green-900">
+                                        <span>{i.name} × {i.qty}</span>
+                                        <span>{rupee(i.price * i.qty)}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -920,10 +968,31 @@ export default function Admin() {
             });
           });
 
-          const periodRevenue = sold.reduce((s, o) => s + (o.total || 0), 0);
+const periodRevenue = sold.reduce((s, o) => s + (o.total || 0), 0);
           const topItems = Object.entries(itemQty)
             .sort((a, b) => b[1] - a[1])
             .slice(0, 10);
+
+          // Group sold orders by day or by week for the breakdown panel.
+          const groupSold = (o) => {
+            const d = new Date(o.createdAt);
+            if (salesGroup === "week") {
+              const day = (d.getDay() + 6) % 7; // Mon=0 ... Sun=6
+              const weekStart = new Date(d);
+              weekStart.setDate(d.getDate() - day);
+              weekStart.setHours(0, 0, 0, 0);
+              return weekStart.getTime();
+            }
+            return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+          };
+          const byPeriod = new Map();
+          sold.forEach((o) => {
+            const key = groupSold(o);
+            if (!byPeriod.has(key)) byPeriod.set(key, []);
+            byPeriod.get(key).push(o);
+          });
+const periods = Array.from(byPeriod.entries()).sort((a, b) => b[0] - a[0]);
+          const periodLabel = (key) => (salesGroup === "day" ? fmtDate(key) : weekLabel(key));
 
           const statCard = (label, value, sub) => (
             <div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm">
@@ -938,36 +1007,32 @@ export default function Admin() {
               <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <div>
                   <h2 className="text-green-950 text-lg font-semibold" style={{ fontFamily: "'Fraunces', serif" }}>Sales</h2>
-                  <p className="text-green-800/50 text-xs mt-0.5">
+<p className="text-green-800/50 text-xs mt-0.5">
                     Based on completed orders &middot; {rangeLabel}
                   </p>
                 </div>
-                {RangeFilter}
+                <div className="flex flex-wrap items-center gap-2">
+                  {RangeFilter}
+                  <div className="flex gap-2">
+                    {[
+                      { id: "day", label: "By day" },
+                      { id: "week", label: "By week" },
+                    ].map((g) => (
+                      <button
+                        key={g.id}
+                        onClick={() => setSalesGroup(g.id)}
+                        className={`px-3.5 py-2 rounded-lg text-sm font-medium border ${
+                          salesGroup === g.id ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-300 bg-white text-green-800"
+                        }`}
+                      >
+                        {g.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
-              {/* Sub-tabs: Stats | Payments */}
-              <div className="flex gap-1 mb-4 border-b border-green-200">
-                {[
-                  { id: "stats", label: "Stats" },
-                  { id: "payments", label: "Payments" },
-                ].map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => setSalesSub(s.id)}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                      salesSub === s.id ? "border-amber-400 text-amber-600" : "border-transparent text-green-800/60 hover:text-green-950"
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-
-              {salesSub === "payments" ? (
-                <PaymentsView />
-              ) : (
-                <>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+<div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
                     {statCard("Orders", sold.length)}
                     {statCard("Revenue", rupee(periodRevenue))}
                     {statCard("Paid", rupee(sold.filter((o) => o.paymentStatus === "paid").reduce((s, o) => s + (o.total || 0), 0)))}
@@ -987,20 +1052,25 @@ export default function Admin() {
                     </div>
                   </div>
 
-                  <div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm mt-6">
-                    <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-3">Daily sales summary</h3>
-                    {salesSummary.length === 0 && <p className="text-green-800/50 text-sm">No sales summary data yet.</p>}
-                    <div className="space-y-2">
-                      {salesSummary.map((row) => (
-                        <div key={row.date} className="flex items-center justify-between text-sm">
-                          <span className="text-green-950">{new Date(row.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</span>
-                          <span className="text-green-800/70">{row.orders_count} orders · {rupee(Number(row.revenue))}</span>
-                        </div>
-                      ))}
+<div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm mt-6">
+                    <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-3">
+                      {salesGroup === "day" ? "Sales by day" : "Sales by week"} ({rangeLabel})
+                    </h3>
+                    {periods.length === 0 && <p className="text-green-800/50 text-sm">No completed orders in this range.</p>}
+                    <div className="space-y-3">
+                      {periods.map(([key, list]) => {
+                        const periodRevenue = list.reduce((s, o) => s + (o.total || 0), 0);
+                        return (
+                          <div key={key} className="border-b border-green-100 pb-2 last:border-0">
+                            <div className="flex items-center justify-between text-sm">
+<span className="text-green-950">{periodLabel(key)}</span>
+<span className="text-green-800/70">{list.length} {list.length === 1 ? "order" : "orders"} · {rupee(periodRevenue)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                </>
-              )}
             </div>
           );
         })()}

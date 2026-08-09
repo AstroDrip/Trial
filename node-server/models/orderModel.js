@@ -4,7 +4,7 @@ const events = require("../utils/events");
 // Shared SQL fragment for the order row (for getOrders / getArchivedOrders).
 const ORDER_SELECT = `
   SELECT
-    o.id, o.invoice_id, o.status, o.order_mode, o.delivery_time, o.notes, o.total,
+    o.id, o.invoice_id, o.status, o.order_mode, o.notes, o.total,
     o.created_at, o.payment_status, o.paymet AS payment_method, o.archived,
     c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address,
     c.latitude, c.longitude,
@@ -22,7 +22,7 @@ const ORDER_SELECT = `
 // Insert a single order (customer + order + items) inside one transaction.
 // Takes an optional `orderIdOverride` so that on a PK collision we can retry
 // with a server-generated suffix instead of crashing the user's request.
-async function insertOrder(client, { id, invoiceId, customer, items, total, status, orderMode, deliveryTime, notes, paymentStatus }, orderIdOverride) {
+async function insertOrder(client, { id, invoiceId, customer, items, total, status, orderMode, notes, paymentStatus }, orderIdOverride) {
   const finalId = orderIdOverride || id;
 
   const custResult = await client.query(
@@ -36,9 +36,9 @@ async function insertOrder(client, { id, invoiceId, customer, items, total, stat
   const paymentMethod = customer?.paymentMethod || "cod";
 
   const orderResult = await client.query(
-    `INSERT INTO orders (id, customer_id, invoice_id, status, order_mode, delivery_time, notes, total, payment_status, paymet)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-    [finalId, customerId, invoiceId, status || "pending", orderMode, deliveryTime || null, notes || null, total, paymentStatus || "unpaid", paymentMethod]
+`INSERT INTO orders (id, customer_id, invoice_id, status, order_mode, notes, total, payment_status, paymet)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+    [finalId, customerId, invoiceId, status || "pending", orderMode, notes || null, total, paymentStatus || "unpaid", paymentMethod]
   );
 
   for (const item of items) {
@@ -52,7 +52,7 @@ async function insertOrder(client, { id, invoiceId, customer, items, total, stat
   return { ...orderResult.rows[0], customer, items };
 }
 
-async function createOrder({ id, invoiceId, customer, items, total, status, orderMode, deliveryTime, notes, paymentStatus }) {
+async function createOrder({ id, invoiceId, customer, items, total, status, orderMode, notes, paymentStatus }) {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
@@ -62,14 +62,14 @@ async function createOrder({ id, invoiceId, customer, items, total, status, orde
     // retry once with a server-generated suffix instead of failing.
     let order;
     try {
-      order = await insertOrder(client, { id, invoiceId, customer, items, total, status, orderMode, deliveryTime, notes, paymentStatus });
+order = await insertOrder(client, { id, invoiceId, customer, items, total, status, orderMode, notes, paymentStatus });
     } catch (err) {
       const isUniqueViolation = err?.code === "23505";
       if (isUniqueViolation) {
         await client.query("ROLLBACK");
         await client.query("BEGIN");
         const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
-        order = await insertOrder(client, { id, invoiceId, customer, items, total, status, orderMode, deliveryTime, notes, paymentStatus }, `${id}-${suffix}`);
+        order = await insertOrder(client, { id, invoiceId, customer, items, total, status, orderMode, notes, paymentStatus }, `${id}-${suffix}`);
       } else {
         throw err;
       }

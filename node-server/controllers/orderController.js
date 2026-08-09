@@ -16,9 +16,9 @@ const createOrder = async (req, res) => {
     const { id, invoiceId, customer, items, total, status, paymentStatus } = req.body;
     const orderMode = customer?.mode || "Delivery";
 
-    const order = await orderModel.createOrder({
+const order = await orderModel.createOrder({
       id, invoiceId, customer, items, total, status,
-      orderMode, deliveryTime: null, notes: customer?.notes, paymentStatus,
+      orderMode, notes: customer?.notes, paymentStatus,
     });
 
     res.status(201).json({ success: true, data: order });

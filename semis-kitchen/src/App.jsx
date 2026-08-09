@@ -345,7 +345,7 @@ function CustomerApp({ menu, inventory, heroImages }) {
               ))}
             </div>
             <div className="flex gap-2 mb-4">
-              {[
+{[
                 { id: "cod", label: "Cash on Delivery" },
                 { id: "upi", label: "UPI" },
               ].map((p) => (
@@ -360,6 +360,11 @@ function CustomerApp({ menu, inventory, heroImages }) {
                   {p.label}
                 </button>
               ))}
+              {form.paymentMethod === "upi" && (
+                <p className="text-xs text-amber-300/90 bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2">
+                  A QR code will be sent to your provided phone number to complete the payment.
+                </p>
+              )}
             </div>
             <div className="space-y-3">
               <input

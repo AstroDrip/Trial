@@ -7,4 +7,15 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  server: {
+    proxy: {
+      // Proxy API calls to the backend so the frontend can use a relative
+      // /api path (same origin). This avoids LAN-IP reachability and CORS
+      // issues when the site is opened via localhost or a network address.
+      "/api": {
+        target: "http://localhost:5000",
+        changeOrigin: true,
+      },
+    },
+  },
 })

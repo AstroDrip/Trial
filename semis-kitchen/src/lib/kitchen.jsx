@@ -9,9 +9,11 @@ import {
 } from "lucide-react";
 
 // API base URL — set VITE_API_URL in production (Vercel env var) to point at
-// your deployed backend (e.g. https://your-api.vercel.app/api). Falls back to
-// local dev server when the env var isn't set.
-export const API = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+// your deployed backend (e.g. https://your-api.vercel.app/api). In local dev
+// it defaults to a relative "/api" path, which the Vite dev server proxies to
+// the backend (see vite.config.js). Using a relative path avoids LAN-IP
+// reachability and CORS issues so the site works from any host.
+export const API = import.meta.env.VITE_API_URL || "/api";
 
 /* ---------------------------------------------------------
    Brand
