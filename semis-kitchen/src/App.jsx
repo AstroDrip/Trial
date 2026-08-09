@@ -344,24 +344,26 @@ function CustomerApp({ menu, inventory, heroImages }) {
                 </button>
               ))}
             </div>
-            <div className="flex gap-2 mb-4">
-{[
-                { id: "cod", label: "Cash on Delivery" },
-                { id: "upi", label: "UPI" },
-              ].map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setForm((f) => ({ ...f, paymentMethod: p.id }))}
-                  className={`flex-1 py-2.5 px-2 rounded-lg text-sm font-medium border ${
-                    form.paymentMethod === p.id ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-800 text-stone-300"
-                  }`}
-                >
-                  {p.label}
-                </button>
-              ))}
+<div className="mb-4">
+              <div className="flex gap-2">
+                {[
+                  { id: "cod", label: "Cash on Delivery" },
+                  { id: "upi", label: "UPI" },
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, paymentMethod: p.id }))}
+                    className={`flex-1 py-2.5 px-2 rounded-lg text-sm font-medium border ${
+                      form.paymentMethod === p.id ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-800 text-stone-300"
+                    }`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
               {form.paymentMethod === "upi" && (
-                <p className="text-xs text-amber-300/90 bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2">
+                <p className="mt-2 text-sm text-amber-300/90 bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2">
                   A QR code will be sent to your provided phone number to complete the payment.
                 </p>
               )}

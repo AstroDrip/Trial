@@ -324,6 +324,33 @@ export async function fetchSalesSummary() {
   return json.data; // [{ date, orders_count, revenue }]
 }
 
+/* ---------------------------------------------------------
+   Invoice helpers (PDF generation + Google Sheets sync)
+--------------------------------------------------------- */
+/* Download a single invoice PDF for an order (opens in a new tab). */
+export function downloadInvoice(orderId) {
+  window.open(`${API}/invoices/${encodeURIComponent(orderId)}`, "_blank");
+}
+
+/* Download a ZIP of one PDF per accepted order. */
+export function downloadAllInvoices() {
+  const a = document.createElement("a");
+  a.href = `${API}/invoices/batch`;
+  a.download = `invoices-${Date.now()}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+/* Push all accepted orders' line items into the configured Google Sheet.
+   Returns { success, appended } or throws on failure. */
+export async function syncToSheets() {
+  const res = await fetch(`${API}/invoices/sync-sheet`, { method: "POST" });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error || "Sync to Google Sheets failed");
+  return json; // { success, appended }
+}
+
 export async function loadHeroImages() {
   const v = await readStorage("heroImages");
   if (v) return v;

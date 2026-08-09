@@ -9,9 +9,11 @@ import {
   Package,
   Trash2,
   UtensilsCrossed,
-  Save,
+Save,
   FileText,
   Search,
+  Download,
+  Share2,
 } from "lucide-react";
 import {
   API,
@@ -28,11 +30,14 @@ import {
   fetchOrders,
   fetchArchivedOrders,
   archiveOrdersApi,
-  decrementStockApi,
+decrementStockApi,
   updateOrderStatusApi,
   updatePaymentStatusApi,
   fetchSalesSummary,
   paymentMethodLabel,
+  downloadInvoice,
+  downloadAllInvoices,
+  syncToSheets,
 } from "./lib/kitchen.jsx";
 
 /* ---------------------------------------------------------
@@ -713,7 +718,7 @@ const weekLabel = (ts) => {
                     {searched.length} completed {searched.length === 1 ? "order" : "orders"} &middot; {invoiceGroup === "day" ? "grouped by day" : invoiceGroup === "week" ? "grouped by week" : "newest first"}
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+<div className="flex flex-wrap items-center gap-2">
                   {RangeFilter}
                   <div className="flex gap-2">
 {[
@@ -730,6 +735,30 @@ const weekLabel = (ts) => {
                         {g.label}
                       </button>
                     ))}
+                  </div>
+                  {/* Invoice actions: download all accepted PDFs + sync to Google Sheets */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => downloadAllInvoices()}
+                      title="Download a ZIP of one PDF per accepted order"
+                      className="px-3.5 py-2 rounded-lg text-sm font-semibold border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                    >
+                      <Download className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Download all
+                    </button>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const { appended } = await syncToSheets();
+                          alert(`Synced ${appended} row(s) to Google Sheets.`);
+                        } catch (err) {
+                          alert(err.message || "Sync to Google Sheets failed.");
+                        }
+                      }}
+                      title="Push accepted orders' line items to the configured Google Sheet"
+                      className="px-3.5 py-2 rounded-lg text-sm font-semibold border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                    >
+                      <Share2 className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Sync to Sheets
+                    </button>
                   </div>
                 </div>
               </div>
@@ -795,13 +824,21 @@ const weekLabel = (ts) => {
                               <div className="font-semibold text-amber-600 mt-2">{rupee(o.total)}</div>
                             </div>
                           </div>
-                          <div className="border-t border-green-100 pt-3 space-y-1">
+<div className="border-t border-green-100 pt-3 space-y-1">
                             {o.items.map((i) => (
                               <div key={i.id} className="flex justify-between text-sm text-green-900">
                                 <span>{i.name} × {i.qty}</span>
                                 <span>{rupee(i.price * i.qty)}</span>
                               </div>
                             ))}
+                          </div>
+                          <div className="flex justify-end mt-3 pt-3 border-t border-green-100">
+                            <button
+                              onClick={() => downloadInvoice(o.id)}
+                              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-amber-300 text-amber-700 hover:bg-amber-50"
+                            >
+                              <Download className="w-3.5 h-3.5" /> Download PDF
+                            </button>
                           </div>
                         </div>
                       ))}
@@ -837,13 +874,21 @@ const weekLabel = (ts) => {
                                       <div className="font-semibold text-amber-600 mt-2">{rupee(o.total)}</div>
                                     </div>
                                   </div>
-                                  <div className="border-t border-green-100 pt-3 space-y-1">
+<div className="border-t border-green-100 pt-3 space-y-1">
                                     {o.items.map((i) => (
                                       <div key={i.id} className="flex justify-between text-sm text-green-900">
                                         <span>{i.name} × {i.qty}</span>
                                         <span>{rupee(i.price * i.qty)}</span>
                                       </div>
                                     ))}
+                                  </div>
+                                  <div className="flex justify-end mt-3 pt-3 border-t border-green-100">
+                                    <button
+                                      onClick={() => downloadInvoice(o.id)}
+                                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-amber-300 text-amber-700 hover:bg-amber-50"
+                                    >
+                                      <Download className="w-3.5 h-3.5" /> Download PDF
+                                    </button>
                                   </div>
                                 </div>
                               ))}

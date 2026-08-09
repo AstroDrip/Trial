@@ -7,6 +7,7 @@ const inventoryRoutes = require("./routes/inventoryRoutes");
 const menuRoutes = require("./routes/menuRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const salesRoutes = require("./routes/salesRoutes");
+const invoiceRoutes = require("./routes/invoiceRoutes");
 const events = require("./utils/events");
 
 const app = express();
@@ -29,6 +30,7 @@ app.use("/api/menu", menuRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/sales", salesRoutes);
+app.use("/api/invoices", invoiceRoutes);
 
 app.get("/", (req, res) => {
   res.json({
