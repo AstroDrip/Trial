@@ -23,15 +23,35 @@ import {
 import LocationPicker from "./components/LocationPicker.jsx";
 
 /* ---------------------------------------------------------
+   Delivery time slots: hourly ranges from 11 AM to 9 PM.
+--------------------------------------------------------- */
+function formatHour12(h) {
+  const period = h >= 12 ? "PM" : "AM";
+  const hr = h % 12 === 0 ? 12 : h % 12;
+  return `${hr}:00 ${period}`;
+}
+const DELIVERY_SLOTS = Array.from({ length: 10 }, (_, i) => {
+  const startHour = 11 + i; // 11 AM .. 8 PM
+  const endHour = startHour + 1; // 12 PM .. 9 PM
+  return { id: `${startHour}-${endHour}`, label: `${formatHour12(startHour)} – ${formatHour12(endHour)}` };
+});
+/* Today's date in YYYY-MM-DD, for the date input's min attribute */
+function todayISO() {
+  const d = new Date();
+  const tz = d.getTimezoneOffset() * 60000;
+  return new Date(d - tz).toISOString().slice(0, 10);
+}
+
+/* ---------------------------------------------------------
    Customer: Menu + Cart + Checkout
 --------------------------------------------------------- */
 function CustomerApp({ menu, inventory, heroImages }) {
-  const [tab, setTab] = useState("frozen");
+  const [tab, setTab] = useState("fried");
   const [cart, setCart] = useState({});
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState(null);
-  const [form, setForm] = useState({ name: "", phone: "", address: "", notes: "", mode: "Delivery", location: null, paymentMethod: "cod" });
+  const [form, setForm] = useState({ name: "", phone: "", address: "", notes: "", mode: "Delivery", location: null, paymentMethod: "cod", deliveryDate: "", deliverySlot: "" });
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [slide, setSlide] = useState(0);
@@ -82,7 +102,14 @@ function CustomerApp({ menu, inventory, heroImages }) {
 
   const submitOrder = async () => {
     const hasLocation = form.location?.lat != null && form.location?.lng != null;
-    if (!form.name.trim() || !form.phone.trim() || (form.mode === "Delivery" && !form.address.trim() && !hasLocation)) return;
+    if (
+      !form.name.trim() ||
+      !form.phone.trim() ||
+      !form.deliveryDate ||
+      !form.deliverySlot ||
+      (form.mode === "Delivery" && !form.address.trim() && !hasLocation)
+    )
+      return;
     setSubmitting(true);
     const order = {
       id: genId(),
@@ -97,6 +124,8 @@ function CustomerApp({ menu, inventory, heroImages }) {
         mode: form.mode,
         location: form.location || null,
         paymentMethod: form.paymentMethod,
+        deliveryDate: form.deliveryDate,
+        deliverySlot: form.deliverySlot,
       },
       status: "pending",
       createdAt: Date.now(),
@@ -116,7 +145,7 @@ function CustomerApp({ menu, inventory, heroImages }) {
     setCartOpen(false);
     // Reset the delivery form so a new customer's checkout doesn't show the
     // previous order's name/phone/address/notes/location.
-    setForm((f) => ({ name: "", phone: "", address: "", notes: "", mode: f.mode, location: null, paymentMethod: f.paymentMethod }));
+    setForm((f) => ({ name: "", phone: "", address: "", notes: "", mode: f.mode, location: null, paymentMethod: f.paymentMethod, deliveryDate: "", deliverySlot: "" }));
     setConfirmedOrder(order);
   };
 
@@ -151,10 +180,6 @@ function CustomerApp({ menu, inventory, heroImages }) {
           >
             Semi's Kitchen
           </div>
-          <p className="text-amber-400 text-xs tracking-[0.3em] uppercase mb-3">Open 9:00 AM – 9:00 PM</p>
-          <h1 className="text-2xl sm:text-3xl text-stone-50 max-w-xl" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>
-            Frozen snacks, fried snacks &amp; slow-cooked curries — straight from our kitchen to your door.
-          </h1>
         </div>
 
         {/* Slide indicators */}
@@ -197,6 +222,11 @@ function CustomerApp({ menu, inventory, heroImages }) {
 
       {/* Menu grid */}
       <main className="max-w-5xl mx-auto px-4 py-6 pb-28">
+        {tab === "mains" && (
+          <p className="mb-4 text-sm text-amber-300/90 bg-amber-400/10 border border-amber-400/30 rounded-lg px-3.5 py-2.5">
+            Please note: same-day delivery is not available for Biriyani &amp; Curry items.
+          </p>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {itemsForTab.map((item) => {
             const available = isAvailable(item.id);
@@ -368,6 +398,30 @@ function CustomerApp({ menu, inventory, heroImages }) {
                 </p>
               )}
             </div>
+            <div className="mb-4">
+              <label className="text-xs text-stone-400 mb-1.5 block">When should the order arrive?</label>
+              <input
+                type="date"
+                min={todayISO()}
+                value={form.deliveryDate}
+                onChange={(e) => setForm((f) => ({ ...f, deliveryDate: e.target.value }))}
+                className="w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
+              />
+              <div className="mt-2 flex gap-1.5 overflow-x-auto pb-1">
+                {DELIVERY_SLOTS.map((slot) => (
+                  <button
+                    key={slot.id}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, deliverySlot: slot.id }))}
+                    className={`shrink-0 px-3 py-2 rounded-lg text-xs font-medium border whitespace-nowrap ${
+                      form.deliverySlot === slot.id ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-800 text-stone-300"
+                    }`}
+                  >
+                    {slot.label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="space-y-3">
               <input
                 placeholder="Full name"
@@ -408,7 +462,14 @@ function CustomerApp({ menu, inventory, heroImages }) {
               <p className="text-red-400 text-sm mt-2">{errorMsg}</p>
             )}
             <button
-              disabled={submitting || !form.name.trim() || !form.phone.trim() || (form.mode === "Delivery" && !form.address.trim() && !(form.location?.lat != null && form.location?.lng != null))}
+              disabled={
+                submitting ||
+                !form.name.trim() ||
+                !form.phone.trim() ||
+                !form.deliveryDate ||
+                !form.deliverySlot ||
+                (form.mode === "Delivery" && !form.address.trim() && !(form.location?.lat != null && form.location?.lng != null))
+              }
               onClick={submitOrder}
               className="w-full mt-3 py-3 rounded-lg bg-amber-400 text-green-950 font-semibold hover:bg-amber-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
@@ -417,6 +478,11 @@ function CustomerApp({ menu, inventory, heroImages }) {
           </div>
         </div>
       )}
+
+      {/* Footer */}
+      <footer className="py-6 text-center">
+        <span className="font-bold tracking-widest text-green-800 select-none">QOZYD</span>
+      </footer>
 
       {/* Confirmation */}
       {confirmedOrder && (

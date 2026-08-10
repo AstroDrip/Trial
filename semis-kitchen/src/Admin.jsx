@@ -14,6 +14,7 @@ Save,
   Search,
   Download,
   Share2,
+  Clock,
 } from "lucide-react";
 import {
   API,
@@ -35,6 +36,8 @@ decrementStockApi,
   updatePaymentStatusApi,
   fetchSalesSummary,
   paymentMethodLabel,
+  deliverySlotLabel,
+  deliveryDateLabel,
   downloadInvoice,
   downloadAllInvoices,
   syncToSheets,
@@ -436,6 +439,11 @@ const [section, setSection] = useState("orders");
                     <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
                   </div>
                   <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
+                  {(o.customer.deliveryDate || o.customer.deliverySlot) && (
+                    <div className="text-amber-700 text-xs mt-0.5 font-medium">
+                      Wants it: {deliveryDateLabel(o.customer.deliveryDate)}{o.customer.deliverySlot ? `, ${deliverySlotLabel(o.customer.deliverySlot)}` : ""}
+                    </div>
+                  )}
                 </div>
                 <div className="text-right">
                   <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ring-1 ${
@@ -574,6 +582,13 @@ const [section, setSection] = useState("orders");
                           </span>
                         )}
                       </div>
+                      {(o.customer.deliveryDate || o.customer.deliverySlot) && (
+                        <div className="flex items-center gap-1.5 text-amber-700 text-xs mt-1 font-medium">
+                          <Clock className="w-3 h-3 shrink-0" />
+                          {deliveryDateLabel(o.customer.deliveryDate)}
+                          {o.customer.deliverySlot ? `, ${deliverySlotLabel(o.customer.deliverySlot)}` : ""}
+                        </div>
+                      )}
                       {o.customer.mode === "Delivery" && o.customer.address && (
                         <div className="flex items-start gap-1.5 text-green-800/70 text-xs mt-1 max-w-sm min-w-0">
                           <MapPin className="w-3 h-3 mt-0.5 shrink-0" />

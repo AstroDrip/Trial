@@ -20,7 +20,7 @@ if (!connectionString) {
   process.exit(1);
 }
 
-const sqlFile = path.join(__dirname, "sales_summary.sql");
+const sqlFile = path.join(__dirname, process.argv[2] || "sales_summary.sql");
 const sql = fs.readFileSync(sqlFile, "utf8");
 
 // Split on a semicolon immediately followed by a newline (or end of string).

@@ -19,6 +19,12 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS paymet TEXT DEFAULT 'cod';
 -- admins share the same archive via PostgreSQL.
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT false;
 
+-- Requested delivery/pickup date + time slot, chosen by the customer at
+-- checkout. delivery_slot stores a slot id like "11-12" meaning
+-- 11:00 AM - 12:00 PM (slots run hourly from 11 AM to 9 PM).
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_date DATE;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_slot TEXT;
+
 -- ---------------------------------------------------------------------------
 -- Real-time event outbox used by the SSE system (utils/events.js). This lets
 -- the event-driven admin dashboard replay missed events across multiple

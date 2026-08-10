@@ -23,8 +23,8 @@ export const FONTS = `
 `;
 
 export const CATS = [
-  { id: "frozen", name: "Frozen Snacks", icon: Snowflake },
   { id: "fried", name: "Fried Snacks", icon: Flame },
+  { id: "frozen", name: "Frozen Snacks", icon: Snowflake },
   { id: "mains", name: "Biriyani & Curries", icon: Soup },
 ];
 
@@ -245,6 +245,28 @@ export function paymentMethodLabel(code) {
   return map[code] || code;
 }
 
+/* Map a delivery slot id like "11-12" to a readable label like
+   "11:00 AM – 12:00 PM". Mirrors the slot generation in App.jsx. */
+export function deliverySlotLabel(slotId) {
+  if (!slotId) return null;
+  const [start, end] = slotId.split("-").map(Number);
+  if (Number.isNaN(start) || Number.isNaN(end)) return slotId;
+  const fmt = (h) => {
+    const period = h >= 12 ? "PM" : "AM";
+    const hr = h % 12 === 0 ? 12 : h % 12;
+    return `${hr}:00 ${period}`;
+  };
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
+/* Format a YYYY-MM-DD (or Date-parsable) delivery date for display. */
+export function deliveryDateLabel(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
 /* Shared mapper: raw API order row -> frontend order object. */
 function mapOrder(o) {
   return {
@@ -262,6 +284,8 @@ function mapOrder(o) {
       mode: o.order_mode,
       notes: o.notes,
       location: o.latitude != null ? { lat: o.latitude, lng: o.longitude } : null,
+      deliveryDate: o.delivery_date,
+      deliverySlot: o.delivery_slot,
     },
     items: o.items.map((i) => ({ id: i.id, name: formatItemName(i.name), qty: Number(i.qty), price: Number(i.price) })),
   };

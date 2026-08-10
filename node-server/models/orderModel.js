@@ -6,6 +6,7 @@ const ORDER_SELECT = `
   SELECT
     o.id, o.invoice_id, o.status, o.order_mode, o.notes, o.total,
     o.created_at, o.payment_status, o.paymet AS payment_method, o.archived,
+    o.delivery_date, o.delivery_slot,
     c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address,
     c.latitude, c.longitude,
     COALESCE(
@@ -34,11 +35,13 @@ async function insertOrder(client, { id, invoiceId, customer, items, total, stat
   const customerId = custResult.rows[0].id;
 
   const paymentMethod = customer?.paymentMethod || "cod";
+  const deliveryDate = customer?.deliveryDate || null;
+  const deliverySlot = customer?.deliverySlot || null;
 
   const orderResult = await client.query(
-`INSERT INTO orders (id, customer_id, invoice_id, status, order_mode, notes, total, payment_status, paymet)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [finalId, customerId, invoiceId, status || "pending", orderMode, notes || null, total, paymentStatus || "unpaid", paymentMethod]
+`INSERT INTO orders (id, customer_id, invoice_id, status, order_mode, notes, total, payment_status, paymet, delivery_date, delivery_slot)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+    [finalId, customerId, invoiceId, status || "pending", orderMode, notes || null, total, paymentStatus || "unpaid", paymentMethod, deliveryDate, deliverySlot]
   );
 
   for (const item of items) {

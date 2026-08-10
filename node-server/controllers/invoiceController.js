@@ -1,6 +1,6 @@
 const db = require("../config/db");
 const { generateInvoicePDF, groupOrders } = require("../utils/invoiceGenerator");
-const { SINGLE_ORDER_QUERY, ACCEPTED_ORDERS_QUERY } = require("../utils/invoiceQueries");
+const { SINGLE_ORDER_QUERY, ACCEPTED_ORDERS_QUERY, COMPLETED_ORDERS_QUERY } = require("../utils/invoiceQueries");
 const { pushOrderRowsToSheet } = require("../utils/googleSheetsSync");
 
 // GET /api/invoices/:orderId  -> streams back a single filled invoice PDF
@@ -49,12 +49,14 @@ async function getAcceptedInvoicesZip(req, res) {
   }
 }
 
-// POST /api/invoices/sync-sheet -> pushes all accepted orders' line items
+// POST /api/invoices/sync-sheet -> pushes all completed orders' line items
 // into the Google Sheet configured via GOOGLE_SHEET_ID (see googleSheetsSync.js
-// for one-time setup steps).
-async function syncAcceptedOrdersToSheet(req, res) {
+// for one-time setup steps). Only orders with status 'completed' are synced
+// (previously this synced 'accepted' orders, which could include orders
+// still in progress).
+async function syncCompletedOrdersToSheet(req, res) {
   try {
-    const result = await db.query(ACCEPTED_ORDERS_QUERY);
+    const result = await db.query(COMPLETED_ORDERS_QUERY);
     const { appended } = await pushOrderRowsToSheet(result.rows);
     res.json({ success: true, appended });
   } catch (err) {
@@ -63,4 +65,4 @@ async function syncAcceptedOrdersToSheet(req, res) {
   }
 }
 
-module.exports = { getInvoice, getAcceptedInvoicesZip, syncAcceptedOrdersToSheet };
+module.exports = { getInvoice, getAcceptedInvoicesZip, syncCompletedOrdersToSheet };
