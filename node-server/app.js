@@ -73,6 +73,14 @@ app.get("/api/events", async (req, res) => {
     console.warn("⚠️ SSE replay error:", err.message);
   }
 
+  // Sentinel marking "replay finished, everything from here is live". No
+  // `id:` line — it isn't a real outbox event, so it shouldn't advance the
+  // client's Last-Event-ID. Lets the admin dashboard tell catch-up events
+  // (missed while the tab was closed) apart from ones arriving in real time,
+  // so it can batch them into a single "N orders came in while you were
+  // away" notice instead of re-pinging once per missed order.
+  send({ type: "replay_complete" });
+
   // Live subscription for this instance.
   const unsubscribe = events.subscribe((evt) => {
     res.write(`id: ${evt.id}\n`);

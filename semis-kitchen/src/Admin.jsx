@@ -44,11 +44,82 @@ decrementStockApi,
 } from "./lib/kitchen.jsx";
 
 /* ---------------------------------------------------------
+   Admin session persistence: once unlocked, remember it in
+   sessionStorage (cleared when the browser tab/window closes,
+   unlike localStorage) so a page refresh doesn't ask for the
+   passcode again. A random token + expiry means a stale/tampered
+   value left over in storage can't unlock the app on its own —
+   it still has to match what tryUnlock() wrote. Note this is a
+   client-side UX gate only: the admin API endpoints themselves
+   don't check this token, the same as before.
+--------------------------------------------------------- */
+const ADMIN_SESSION_KEY = "semis_admin_session";
+const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+function readAdminSession() {
+  try {
+    const raw = sessionStorage.getItem(ADMIN_SESSION_KEY);
+    if (!raw) return null;
+    const session = JSON.parse(raw);
+    if (!session?.token || !session?.expiresAt || Date.now() > session.expiresAt) {
+      sessionStorage.removeItem(ADMIN_SESSION_KEY);
+      return null;
+    }
+    return session;
+  } catch {
+    return null;
+  }
+}
+
+function writeAdminSession() {
+  const token = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const session = { token, expiresAt: Date.now() + ADMIN_SESSION_TTL_MS };
+  try {
+    sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session));
+  } catch {}
+  return session;
+}
+
+function clearAdminSession() {
+  try {
+    sessionStorage.removeItem(ADMIN_SESSION_KEY);
+  } catch {}
+}
+
+/* Plays two short "ping" tones via the Web Audio API (no audio file needed).
+   Used to alert kitchen staff to a new pending order without having to
+   watch the screen. Browsers block audio until a real user gesture has
+   happened on the page — see the "arm on first tap" effect below, which
+   covers the case where the admin page auto-unlocks from a saved session
+   (no click involved) rather than the passcode form. */
+function playOrderPing(ctx) {
+  if (!ctx) return;
+  try {
+    if (ctx.state === "suspended") ctx.resume();
+    const beepAt = (startOffset) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880; // A5 — a bright, clear "ping"
+      gain.gain.setValueAtTime(0, ctx.currentTime + startOffset);
+      gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + startOffset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + startOffset + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + startOffset);
+      osc.stop(ctx.currentTime + startOffset + 0.32);
+    };
+    beepAt(0);
+    beepAt(0.35); // second ping, just after the first
+  } catch {}
+}
+
+/* ---------------------------------------------------------
    Admin dashboard (secret route /nashi)
 --------------------------------------------------------- */
 export default function Admin() {
   const navigate = useNavigate();
-  const [unlocked, setUnlocked] = useState(false);
+  const [unlocked, setUnlocked] = useState(() => !!readAdminSession());
   const [code, setCode] = useState("");
   const [error, setError] = useState(false);
   const [tab, setTab] = useState("pending");
@@ -102,9 +173,43 @@ const [section, setSection] = useState("orders");
   // We track the last event id in a ref so reconnecting doesn't drop events
   // and so we don't tear down/recreate the connection on every event.
   // -------------------------------------------------------------------------
-  const lastEventIdRef = useRef(0);
+  // -------------------------------------------------------------------------
+  // New-order ping: an AudioContext needs a real user gesture before it's
+  // allowed to play sound. A passcode-entry unlock counts as one gesture; an
+  // auto-unlock from a saved session (see readAdminSession) does not, so we
+  // also arm it on the very next tap/click anywhere on the page.
+  // -------------------------------------------------------------------------
+  const audioCtxRef = useRef(null);
   useEffect(() => {
     if (!unlocked) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!audioCtxRef.current) audioCtxRef.current = new AC();
+    const arm = () => audioCtxRef.current?.resume();
+    document.addEventListener("pointerdown", arm, { once: true });
+    return () => document.removeEventListener("pointerdown", arm);
+  }, [unlocked]);
+
+  // Last SSE event id this device has seen, persisted in localStorage (not
+  // just a ref) so it survives a full refresh/close, not only re-renders.
+  // Previously this lived only in a ref that reset to 0 on every page load,
+  // which meant every refresh replayed the *entire* event history (up to
+  // 500 events) and would re-fire the new-order ping for each one.
+  const LAST_EVENT_ID_KEY = "semis_admin_last_event_id";
+  const readLastEventId = () => {
+    try {
+      return Number(localStorage.getItem(LAST_EVENT_ID_KEY)) || 0;
+    } catch {
+      return 0;
+    }
+  };
+  const lastEventIdRef = useRef(readLastEventId());
+  const hadPriorSessionRef = useRef(lastEventIdRef.current > 0);
+  const [missedOrders, setMissedOrders] = useState(0);
+  useEffect(() => {
+    if (!unlocked) return;
+    let caughtUp = false;
+    let missedCount = 0;
     const src = new EventSource(`${API}/events?last=${lastEventIdRef.current}`);
     src.onmessage = (e) => {
       try {
@@ -113,11 +218,37 @@ const [section, setSection] = useState("orders");
         // the `?last=` query param valid for DB replay on reconnect.
         if (e.lastEventId) {
           const parsed = Number(e.lastEventId);
-          if (Number.isFinite(parsed) && parsed > 0) lastEventIdRef.current = parsed;
+          if (Number.isFinite(parsed) && parsed > 0) {
+            lastEventIdRef.current = parsed;
+            try {
+              localStorage.setItem(LAST_EVENT_ID_KEY, String(parsed));
+            } catch {}
+          }
+        }
+        if (evt.type === "replay_complete") {
+          caughtUp = true;
+          // Only surface a "while you were away" notice on a genuine
+          // reconnect (this device had a prior session) — not on this
+          // browser's very first-ever connection, where every past order
+          // would otherwise get flagged as "missed".
+          if (hadPriorSessionRef.current && missedCount > 0) {
+            setMissedOrders((n) => n + missedCount);
+            playOrderPing(audioCtxRef.current);
+          }
+          hadPriorSessionRef.current = true;
+          return;
         }
         if (evt.type === "order_created") {
           refreshOrders();
           refreshArchived();
+          if (caughtUp) {
+            // A genuinely live order — ping immediately as before.
+            playOrderPing(audioCtxRef.current);
+          } else {
+            // Part of the catch-up replay — count it, ping once as a batch
+            // after replay_complete instead of once per missed order.
+            missedCount += 1;
+          }
         } else if (evt.type === "inventory_updated") {
           setInventory((prev) => {
             const id = evt.payload.menu_item_id;
@@ -147,11 +278,18 @@ const [section, setSection] = useState("orders");
 
   const tryUnlock = () => {
     if (code === ADMIN_CODE) {
+      writeAdminSession();
       setUnlocked(true);
       setError(false);
     } else {
       setError(true);
     }
+  };
+
+  const logout = () => {
+    clearAdminSession();
+    setUnlocked(false);
+    setCode("");
   };
 
   const setOrderStatus = async (id, status) => {
@@ -511,6 +649,13 @@ const [section, setSection] = useState("orders");
             >
               ← Back to site
             </button>
+            <button
+              onClick={logout}
+              title="Log out"
+              className="text-[11px] px-2.5 py-1 rounded-full bg-green-100 border border-green-300 text-green-800 hover:text-red-600"
+            >
+              Log out
+            </button>
           </div>
         </div>
         <div className="max-w-5xl mx-auto px-4 flex gap-1">
@@ -534,6 +679,19 @@ const [section, setSection] = useState("orders");
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-6">
+        {missedOrders > 0 && (
+          <div className="mb-5 flex items-center justify-between gap-3 bg-amber-100 border border-amber-300 text-amber-900 rounded-xl px-4 py-3 text-sm">
+            <span>
+              <strong>{missedOrders}</strong> order{missedOrders === 1 ? "" : "s"} came in while you were away.
+            </span>
+            <button
+              onClick={() => setMissedOrders(0)}
+              className="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-200 hover:bg-amber-300 shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         {section === "orders" && (
           <>
             <div className="flex gap-2 mb-5 overflow-x-auto">
