@@ -80,12 +80,6 @@ function writeAdminSession() {
   return session;
 }
 
-function clearAdminSession() {
-  try {
-    sessionStorage.removeItem(ADMIN_SESSION_KEY);
-  } catch {}
-}
-
 /* Plays two short "ping" tones via the Web Audio API (no audio file needed).
    Used to alert kitchen staff to a new pending order without having to
    watch the screen. Browsers block audio until a real user gesture has
@@ -231,18 +225,22 @@ const [section, setSection] = useState("orders");
           // reconnect (this device had a prior session) — not on this
           // browser's very first-ever connection, where every past order
           // would otherwise get flagged as "missed".
-          if (hadPriorSessionRef.current && missedCount > 0) {
-            setMissedOrders((n) => n + missedCount);
-            playOrderPing(audioCtxRef.current);
+          if (missedCount > 0) {
+            refreshOrders();
+            refreshArchived();
+            if (hadPriorSessionRef.current) {
+              setMissedOrders((n) => n + missedCount);
+              playOrderPing(audioCtxRef.current);
+            }
           }
           hadPriorSessionRef.current = true;
           return;
         }
         if (evt.type === "order_created") {
-          refreshOrders();
-          refreshArchived();
           if (caughtUp) {
-            // A genuinely live order — ping immediately as before.
+            // A genuinely live order — refresh + ping immediately, same as before.
+            refreshOrders();
+            refreshArchived();
             playOrderPing(audioCtxRef.current);
           } else {
             // Part of the catch-up replay — count it, ping once as a batch
@@ -284,12 +282,6 @@ const [section, setSection] = useState("orders");
     } else {
       setError(true);
     }
-  };
-
-  const logout = () => {
-    clearAdminSession();
-    setUnlocked(false);
-    setCode("");
   };
 
   const setOrderStatus = async (id, status) => {
@@ -648,13 +640,6 @@ const [section, setSection] = useState("orders");
               className="text-[11px] px-2.5 py-1 rounded-full bg-green-100 border border-green-300 text-green-800 hover:text-amber-600"
             >
               ← Back to site
-            </button>
-            <button
-              onClick={logout}
-              title="Log out"
-              className="text-[11px] px-2.5 py-1 rounded-full bg-green-100 border border-green-300 text-green-800 hover:text-red-600"
-            >
-              Log out
             </button>
           </div>
         </div>

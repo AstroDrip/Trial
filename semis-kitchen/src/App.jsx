@@ -41,6 +41,11 @@ function todayISO() {
   const tz = d.getTimezoneOffset() * 60000;
   return new Date(d - tz).toISOString().slice(0, 10);
 }
+/* iOS Safari renders an empty <input type="date"> as a blank box with no
+   placeholder text (unlike Chrome/Android/desktop, which show "dd/mm/yyyy"
+   on their own). Only iOS needs a manual placeholder overlay — showing one
+   everywhere else double-renders on top of the browser's real placeholder. */
+const IS_IOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
 
 /* ---------------------------------------------------------
    Customer: Menu + Cart + Checkout
@@ -398,41 +403,6 @@ function CustomerApp({ menu, inventory, heroImages }) {
                 </p>
               )}
             </div>
-            <div className="mb-4">
-              <label className="text-xs text-stone-400 mb-1.5 block">When should the order arrive?</label>
-              <div className="relative">
-                <input
-                  type="date"
-                  min={todayISO()}
-                  value={form.deliveryDate}
-                  onChange={(e) => setForm((f) => ({ ...f, deliveryDate: e.target.value }))}
-                  className="w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
-                />
-                {/* iOS Safari shows a blank box with no placeholder text on an
-                    empty <input type="date">. This overlay makes the empty
-                    state readable; it's non-interactive so taps pass through
-                    to the native input underneath. */}
-                {!form.deliveryDate && (
-                  <span className="absolute inset-y-0 left-3.5 flex items-center text-sm text-stone-500 pointer-events-none">
-                    Select a date
-                  </span>
-                )}
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-1.5">
-                {DELIVERY_SLOTS.map((slot) => (
-                  <button
-                    key={slot.id}
-                    type="button"
-                    onClick={() => setForm((f) => ({ ...f, deliverySlot: slot.id }))}
-                    className={`px-2 py-2 rounded-lg text-[11px] leading-tight font-medium border text-center ${
-                      form.deliverySlot === slot.id ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-800 text-stone-300"
-                    }`}
-                  >
-                    {slot.label}
-                  </button>
-                ))}
-              </div>
-            </div>
             <div className="space-y-3">
               <input
                 placeholder="Full name"
@@ -457,6 +427,40 @@ function CustomerApp({ menu, inventory, heroImages }) {
                   }
                 />
               )}
+              <div>
+                <label className="text-xs text-stone-400 mb-1.5 block">When should the order arrive?</label>
+                <div className="relative">
+                  <input
+                    type="date"
+                    min={todayISO()}
+                    value={form.deliveryDate}
+                    onChange={(e) => setForm((f) => ({ ...f, deliveryDate: e.target.value }))}
+                    className="w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
+                  />
+                  {IS_IOS && !form.deliveryDate && (
+                    <span className="absolute inset-y-0 left-3.5 flex items-center text-sm text-stone-500 pointer-events-none">
+                      Select a date
+                    </span>
+                  )}
+                </div>
+                {/* A native <select> so mobile OSes render their own picker —
+                    iOS shows an actual spinning wheel, Android a scrollable
+                    list — instead of a custom-built one. */}
+                <select
+                  value={form.deliverySlot}
+                  onChange={(e) => setForm((f) => ({ ...f, deliverySlot: e.target.value }))}
+                  className="mt-2 w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
+                >
+                  <option value="" disabled>
+                    Select a time slot
+                  </option>
+                  {DELIVERY_SLOTS.map((slot) => (
+                    <option key={slot.id} value={slot.id}>
+                      {slot.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <textarea
                 placeholder="Notes (spice level, allergies, etc.) — optional"
                 value={form.notes}
