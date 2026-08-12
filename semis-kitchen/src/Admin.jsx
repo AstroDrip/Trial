@@ -31,6 +31,7 @@ import {
   fetchOrders,
   fetchArchivedOrders,
   archiveOrdersApi,
+  deletePaidSyncedOrdersApi,
 decrementStockApi,
   updateOrderStatusApi,
   updatePaymentStatusApi,
@@ -917,6 +918,31 @@ const weekLabel = (ts) => {
                     >
                       <Share2 className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Sync to Sheets
                     </button>
+                    {(() => {
+                      const eligible = allInvoiceOrders.filter(
+                        (o) => o.status === "completed" && o.paymentStatus === "paid" && o.syncedAt
+                      );
+                      if (eligible.length === 0) return null;
+                      return (
+                        <button
+                          onClick={async () => {
+                            if (
+                              !confirm(
+                                `Permanently delete ${eligible.length} paid & synced invoice${eligible.length === 1 ? "" : "s"} from the database?\n\nThese are already recorded in your Google Sheet — this only frees up database storage, it doesn't touch the sheet.`
+                              )
+                            )
+                              return;
+                            const deletedCount = await deletePaidSyncedOrdersApi();
+                            alert(`Deleted ${deletedCount} invoice${deletedCount === 1 ? "" : "s"}.`);
+                            refreshArchived();
+                          }}
+                          title="Permanently delete paid, already-synced invoices to free up database storage"
+                          className="px-3.5 py-2 rounded-lg text-sm font-semibold border border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Delete paid & synced ({eligible.length})
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

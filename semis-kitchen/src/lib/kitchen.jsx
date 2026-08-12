@@ -321,6 +321,7 @@ function mapOrder(o) {
     status: o.status,
     paymentStatus: o.payment_status || "unpaid",
     paymentMethod: o.payment_method || "cod",
+    syncedAt: o.synced_at,
     total: Number(o.total),
     createdAt: new Date(o.created_at).getTime(),
     customer: {
@@ -346,6 +347,15 @@ export async function fetchOrders() {
 
 export async function deleteOrderApi(id) {
   await fetch(`${API}/orders/${id}`, { method: "DELETE" });
+}
+
+/* Deletes orders that are completed, paid, and already confirmed synced to
+   the Google Sheet — see the Admin Invoices tab's "Delete paid & synced"
+   button. Returns how many rows were actually deleted. */
+export async function deletePaidSyncedOrdersApi() {
+  const res = await fetch(`${API}/orders/paid-synced`, { method: "DELETE" });
+  const json = await res.json();
+  return json.deletedCount ?? 0;
 }
 
 /* Fetch archived (backed-up) orders from the shared database. This replaces

@@ -25,6 +25,25 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS archived BOOLEAN DEFAULT false;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_date DATE;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_slot TEXT;
 
+-- Tracks whether (and when) an order's line items were pushed to the
+-- Google Sheet. Previously the sync endpoint re-queried and re-appended
+-- every completed order on every click, producing duplicate rows in the
+-- sheet on a second sync. Now the sync query only picks up orders where
+-- this is still NULL, and sets it once appended. Also used to gate which
+-- paid orders are safe to delete from the DB (see the "delete paid+synced
+-- invoices" cleanup endpoint) — an order is only deleted once its
+-- financial record is confirmed to live on permanently in the sheet.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ;
+
+-- Tracks whether an order's line items have already been pushed to the
+-- Google Sheet. Previously the sync endpoint re-fetched and re-appended
+-- EVERY completed order on every click, silently creating duplicate rows in
+-- the sheet each time "Sync to Sheets" was pressed more than once. Also used
+-- to safely identify which paid/archived orders are safe to delete (see
+-- deleteSyncedPaidOrders) — an order should never be deleted before its data
+-- has actually made it to the sheet.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ;
+
 -- ---------------------------------------------------------------------------
 -- Real-time event outbox used by the SSE system (utils/events.js). This lets
 -- the event-driven admin dashboard replay missed events across multiple

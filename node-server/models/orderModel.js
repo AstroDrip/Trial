@@ -6,7 +6,7 @@ const ORDER_SELECT = `
   SELECT
     o.id, o.invoice_id, o.status, o.order_mode, o.notes, o.total,
     o.created_at, o.payment_status, o.paymet AS payment_method, o.archived,
-    o.delivery_date, o.delivery_slot,
+    o.delivery_date, o.delivery_slot, o.synced_at,
     c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address,
     c.latitude, c.longitude,
     COALESCE(
@@ -156,4 +156,18 @@ async function deleteOrder(id) {
   await db.query(`DELETE FROM orders WHERE id = $1`, [id]);
 }
 
-module.exports = { createOrder, getOrders, getArchivedOrders, archiveOrders, updateOrderStatus, updatePaymentStatus, deleteOrder };
+// Deletes orders that are financially resolved (paid) AND already confirmed
+// synced to the Google Sheet (synced_at IS NOT NULL) — the sheet is the
+// permanent record for these once synced, so keeping them in the DB forever
+// only costs storage. Deliberately not scoped to `archived` — archiving is
+// just an admin UI/visibility action, not what makes deletion safe.
+async function deletePaidSyncedOrders() {
+  const result = await db.query(
+    `DELETE FROM orders
+     WHERE status = 'completed' AND payment_status = 'paid' AND synced_at IS NOT NULL
+     RETURNING id`
+  );
+  return result.rows.length;
+}
+
+module.exports = { createOrder, getOrders, getArchivedOrders, archiveOrders, updateOrderStatus, updatePaymentStatus, deleteOrder, deletePaidSyncedOrders };

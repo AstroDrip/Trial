@@ -49,15 +49,20 @@ async function getAcceptedInvoicesZip(req, res) {
   }
 }
 
-// POST /api/invoices/sync-sheet -> pushes all completed orders' line items
-// into the Google Sheet configured via GOOGLE_SHEET_ID (see googleSheetsSync.js
-// for one-time setup steps). Only orders with status 'completed' are synced
-// (previously this synced 'accepted' orders, which could include orders
-// still in progress).
+// POST /api/invoices/sync-sheet -> pushes completed-but-not-yet-synced
+// orders' line items into the Google Sheet configured via GOOGLE_SHEET_ID
+// (see googleSheetsSync.js for one-time setup steps), then marks them
+// synced so a second click doesn't re-append the same rows.
 async function syncCompletedOrdersToSheet(req, res) {
   try {
     const result = await db.query(COMPLETED_ORDERS_QUERY);
     const { appended } = await pushOrderRowsToSheet(result.rows);
+
+    const orderIds = [...new Set(result.rows.map((r) => r.order_id))];
+    if (orderIds.length > 0) {
+      await db.query(`UPDATE orders SET synced_at = now() WHERE id = ANY($1)`, [orderIds]);
+    }
+
     res.json({ success: true, appended });
   } catch (err) {
     console.error("❌ Failed to sync orders to sheet:", err);

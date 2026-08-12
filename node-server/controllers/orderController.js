@@ -103,4 +103,18 @@ const archiveOrders = async (req, res) => {
   }
 };
 
-module.exports = { getOrders, createOrder, updateOrderStatus, updatePaymentStatus, deleteOrder, getArchivedOrders, archiveOrders };
+// DELETE /api/orders/paid-synced -> permanently removes orders that are
+// completed, paid, and already confirmed synced to the Google Sheet. Meant
+// as a manual DB-size cleanup action (see /admin's Invoices tab) — the sheet
+// is the durable record for these once synced, so the DB copy is disposable.
+const deletePaidSyncedOrders = async (req, res) => {
+  try {
+    const deletedCount = await orderModel.deletePaidSyncedOrders();
+    res.json({ success: true, deletedCount });
+  } catch (err) {
+    console.error("❌ Failed to delete paid+synced orders:", err.message);
+    res.status(500).json({ success: false, message: "Failed to delete paid+synced orders" });
+  }
+};
+
+module.exports = { getOrders, createOrder, updateOrderStatus, updatePaymentStatus, deleteOrder, getArchivedOrders, archiveOrders, deletePaidSyncedOrders };
