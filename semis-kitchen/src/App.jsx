@@ -15,6 +15,7 @@ import {
   genInvoiceId,
   resolveImg,
   loadMenu,
+  loadMenuStored,
   loadInventory,
   createOrder,
   loadHeroImages,
@@ -50,7 +51,7 @@ const IS_IOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navig
 /* ---------------------------------------------------------
    Customer: Menu + Cart + Checkout
 --------------------------------------------------------- */
-function CustomerApp({ menu, inventory, heroImages }) {
+function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
   const [tab, setTab] = useState("fried");
   const [cart, setCart] = useState({});
   const [cartOpen, setCartOpen] = useState(false);
@@ -232,6 +233,37 @@ function CustomerApp({ menu, inventory, heroImages }) {
             Please note: same-day delivery is not available for Biriyani &amp; Curry items.
           </p>
         )}
+        {/* Menu grid — skeleton while the first load is in flight, a friendly
+            offline message (with retry) if it failed, else the real items. */}
+        {menu.length === 0 ? (
+          menuState === "error" ? (
+            <div className="rounded-xl border border-green-800 bg-green-900/40 p-8 text-center">
+              <p className="text-stone-200 font-medium">We couldn't load the menu right now.</p>
+              <p className="text-stone-500 text-sm mt-1">Please check your connection and try again.</p>
+              <button
+                onClick={onRetryMenu}
+                className="mt-4 px-4 py-2 rounded-lg bg-amber-400 text-green-950 text-sm font-semibold hover:bg-amber-300 transition-colors"
+              >
+                Try again
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" aria-busy="true" aria-label="Loading menu">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="rounded-xl border border-green-900 bg-green-900/40 overflow-hidden animate-pulse"
+                >
+                  <div className="w-full h-36 bg-green-800/60" />
+                  <div className="p-4 space-y-2">
+                    <div className="h-3 w-2/3 rounded bg-green-800/60" />
+                    <div className="h-3 w-1/3 rounded bg-green-800/60" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {itemsForTab.map((item) => {
             const available = isAvailable(item.id);
@@ -298,6 +330,7 @@ function CustomerApp({ menu, inventory, heroImages }) {
             );
           })}
         </div>
+        )}
       </main>
 
       {/* Floating cart bar */}
@@ -429,13 +462,14 @@ function CustomerApp({ menu, inventory, heroImages }) {
               )}
               <div>
                 <label className="text-xs text-stone-400 mb-1.5 block">When should the order arrive?</label>
-                <div className="relative">
+                <div className="relative overflow-hidden rounded-lg">
                   <input
                     type="date"
                     min={todayISO()}
                     value={form.deliveryDate}
                     onChange={(e) => setForm((f) => ({ ...f, deliveryDate: e.target.value }))}
-                    className="w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
+                    style={{ WebkitAppearance: "none", appearance: "none", boxSizing: "border-box" }}
+                    className="block w-full max-w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
                   />
                   {IS_IOS && !form.deliveryDate && (
                     <span className="absolute inset-y-0 left-3.5 flex items-center text-sm text-stone-500 pointer-events-none">
@@ -532,11 +566,29 @@ function CustomerApp({ menu, inventory, heroImages }) {
    Homepage (customer site)
 --------------------------------------------------------- */
 export default function App() {
-  const [menu, setMenu] = useState([]);
+  // Hybrid: start from the locally-cached catalog so the menu paints instantly
+  // even before the backend responds, then overlay the live inventory (price /
+  // stock / availability) via the refresh below. Falls back to an empty array
+  // on the very first visit (no cache yet), same as before.
+  const [menu, setMenu] = useState(() => loadMenuStored());
   const [inventory, setInventory] = useState({});
   const [heroImages, setHeroImages] = useState([]);
+  // "ready" if a cached catalog is already onscreen to show, else "loading".
+  // Only the very first visit (no cache yet) ever shows the loading skeleton;
+  // returning visitors start "ready" and the live refresh just updates in place.
+  const [menuState, setMenuState] = useState(() => (menu.length ? "ready" : "loading"));
 
-  const refreshMenu = useCallback(async () => setMenu(await loadMenu()), []);
+  const refreshMenu = useCallback(async () => {
+    setMenuState("loading");
+    try {
+      setMenu(await loadMenu());
+      setMenuState("ready");
+    } catch {
+      // No cached catalog and the backend is unreachable — show a friendly
+      // offline message with a retry instead of a blank grid.
+      setMenuState("error");
+    }
+  }, []);
   const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
   const refreshHeroImages = useCallback(async () => {
     const uploaded = await loadHeroImages();
@@ -555,6 +607,8 @@ export default function App() {
       menu={menu}
       inventory={inventory}
       heroImages={heroImages}
+      menuState={menuState}
+      onRetryMenu={() => refreshMenu()}
     />
   );
 }

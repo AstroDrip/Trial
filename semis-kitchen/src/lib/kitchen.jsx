@@ -48,7 +48,7 @@ export async function loadMenu() {
   const res = await fetch(`${API}/menu`);
   const json = await res.json();
 
-  return json.data.map((item) => ({
+  const menu = json.data.map((item) => ({
     id: item.id,
     cat: item.cat,
     name: formatItemName(item.name),
@@ -60,6 +60,15 @@ export async function loadMenu() {
     seasonal: item.seasonal,
     img: item.img,
   }));
+
+  // Hybrid: the live (authoritative) catalog is cached locally so the menu can
+  // paint instantly on later visits even before the backend responds. New live
+  // data always overwrites the cache, so real item ids + current
+  // price/stock/availability stay in sync. Fire-and-forget on purpose — don't
+  // delay the menu returning just to persist the cache.
+  writeMenuCache(menu);
+
+  return menu;
 }
 
 /* Map image filenames (from src/assets/images/) to their built URLs.
@@ -186,6 +195,43 @@ async function readStorage(key) {
   } catch {
     return null;
   }
+}
+
+/* ---------------------------------------------------------
+   Menu catalog cache — the "static catalog" half of the hybrid.
+   After every successful live load, the authoritative menu (real
+   ids + current price/stock/availability) is saved here so the
+   customer page can render it instantly on later visits, then the
+   fresh /api inventory + /api/menu overlay refreshes it. Item ids
+   are the backend's real ids, so orders and admin inventory edits
+   keep working unchanged. localStorage write is synchronous (so we
+   can seed React state on first paint); window.storage (if present)
+   is mirrored so browsers that prefer it stay in sync.
+--------------------------------------------------------- */
+const MENU_CACHE_KEY = "semis_menu_cache";
+
+function readMenuCacheSync() {
+  const v = readLocal(MENU_CACHE_KEY);
+  return Array.isArray(v) ? v : [];
+}
+
+async function writeMenuCache(menu) {
+  if (!Array.isArray(menu) || menu.length === 0) return;
+  try {
+    localStorage.setItem(MENU_CACHE_KEY, JSON.stringify(menu));
+    if (window.storage?.set) {
+      await window.storage.set(MENU_CACHE_KEY, JSON.stringify(menu));
+    }
+  } catch {
+    /* Never let a cache write break the live fetch. */
+  }
+}
+
+/* Last-known catalog, read synchronously for an instant first paint.
+   The live inventory overlay (price/stock/availability) is applied on
+   top by the caller via the regular loadMenu / loadInventory refresh. */
+export function loadMenuStored() {
+  return readMenuCacheSync();
 }
 
 export async function loadInventory() {
