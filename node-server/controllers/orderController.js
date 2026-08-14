@@ -1,5 +1,6 @@
 const orderModel = require("../models/orderModel");
 const salesModel = require("../models/salesModel");
+const { sendInvoiceNotification, sendDeclineNotification } = require("../utils/whatsappNotify");
 
 const getOrders = async (req, res) => {
   try {
@@ -47,6 +48,39 @@ const updateOrderStatus = async (req, res) => {
         ordersDelta: 1,
         revenueDelta: Number(order.total),
       });
+    }
+
+    // Automatic WhatsApp notifications on genuine status transitions only
+    // (guarded by previousStatus, same pattern as the sales-summary block
+    // above) — so re-accepting/re-declining an already-accepted/declined
+    // order doesn't re-send the message. These are awaited (not
+    // fire-and-forget) so the send actually completes before this
+    // serverless function returns, rather than risking being killed
+    // mid-flight — but a WhatsApp failure never fails the status update
+    // itself, it's only logged.
+    if (status === "accepted" && order.previousStatus !== "accepted") {
+      if (!order.customer_phone) {
+        console.warn(`⚠️ Order ${order.id} has no phone on file — skipped WhatsApp invoice notification`);
+      } else if (!process.env.PUBLIC_API_BASE_URL) {
+        console.warn("⚠️ PUBLIC_API_BASE_URL not set — skipped WhatsApp invoice notification");
+      } else {
+        try {
+          const invoiceUrl = `${process.env.PUBLIC_API_BASE_URL}/api/invoices/${order.id}`;
+          await sendInvoiceNotification(order.customer_phone, invoiceUrl, order.total);
+        } catch (err) {
+          console.error(`❌ Failed to send accepted-order WhatsApp notification for ${order.id}:`, err.message);
+        }
+      }
+    } else if (status === "declined" && order.previousStatus !== "declined") {
+      if (!order.customer_phone) {
+        console.warn(`⚠️ Order ${order.id} has no phone on file — skipped WhatsApp decline notification`);
+      } else {
+        try {
+          await sendDeclineNotification(order.customer_phone);
+        } catch (err) {
+          console.error(`❌ Failed to send declined-order WhatsApp notification for ${order.id}:`, err.message);
+        }
+      }
     }
 
     res.json({ success: true, data: order });

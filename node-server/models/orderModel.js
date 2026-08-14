@@ -127,7 +127,9 @@ async function archiveOrders(ids) {
 async function updateOrderStatus(id, status) {
   // Fetch the current status first so callers can tell whether the order is
   // genuinely transitioning into `completed` (avoid double-counting revenue in
-  // the sales summary if the same order is marked completed more than once).
+  // the sales summary if the same order is marked completed more than once)
+  // — and, separately, into `accepted`/`declined` (avoid re-sending the
+  // WhatsApp notification if the same transition is triggered twice).
   const before = await db.query(
     `SELECT status, total FROM orders WHERE id = $1`,
     [id]
@@ -135,7 +137,8 @@ async function updateOrderStatus(id, status) {
   const prev = before.rows[0];
 
   const result = await db.query(
-    `UPDATE orders SET status = $1 WHERE id = $2 RETURNING *`,
+    `UPDATE orders o SET status = $1 WHERE o.id = $2
+     RETURNING o.*, (SELECT phone FROM customers WHERE id = o.customer_id) AS customer_phone`,
     [status, id]
   );
   const updated = result.rows[0];

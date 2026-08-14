@@ -137,7 +137,6 @@ const [section, setSection] = useState("orders");
   const [archived, setArchived] = useState([]);
   const [salesSummary, setSalesSummary] = useState([]);
   const [priceDraft, setPriceDraft] = useState({});
-  const [stockDraft, setStockDraft] = useState({});
 
   const refreshMenu = useCallback(async () => setMenu(await loadMenu()), []);
   const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
@@ -382,27 +381,6 @@ const [section, setSection] = useState("orders");
     });
   };
   const currentPriceOf = (itemId) => (inventory[itemId]?.price != null ? inventory[itemId].price : menu.find((m) => m.id === itemId)?.price);
-
-  const saveStock = async (itemId) => {
-    const raw = stockDraft[itemId];
-    if (raw === undefined || raw === "") return;
-    const stock = Math.max(0, Number(raw));
-    if (!Number.isFinite(stock)) return;
-    const prevStock = inventory[itemId]?.stock ?? "";
-    // Optimistic local update for instant feedback
-    setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], stock } }));
-    try {
-      await updateInventoryField(itemId, { stock });
-    } catch (err) {
-      // Revert to the previous stock value on failure.
-      setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], stock: prevStock } }));
-    }
-    setStockDraft((d) => {
-      const copy = { ...d };
-      delete copy[itemId];
-      return copy;
-    });
-  };
 
   // Clear all orders in a status tab, marking them archived in the shared DB
   // (so every admin sees the same historical invoices/sales).
@@ -1097,22 +1075,13 @@ const weekLabel = (ts) => {
                   {menu.filter((m) => m.cat === c.id).map((item) => {
                     const available = inventory[item.id]?.available !== false;
                     const currentPrice = inventory[item.id]?.price ?? item.price;
-                    const currentStock = inventory[item.id]?.stock ?? "";
                     const priceD = priceDraft[item.id];
-                    const stockD = stockDraft[item.id];
                     return (
                       <div key={item.id} className="border border-green-200 bg-white rounded-lg px-3.5 py-2.5 shadow-sm">
                         <div className="flex items-center justify-between gap-2 mb-2">
                           <div>
                             <div className="text-sm text-green-950">{item.name}</div>
                             <div className="text-xs text-green-800/50">{item.unit}</div>
-                            {currentStock !== "" && (
-                              <div className="text-xs mt-0.5">
-                                <span className={Number(currentStock) <= 0 ? "text-red-500 font-semibold" : "text-green-700"}>
-                                  Stock: {currentStock}
-                                </span>
-                              </div>
-                            )}
                           </div>
                           <button
                             onClick={() => toggleAvailability(item.id)}
@@ -1141,26 +1110,6 @@ const weekLabel = (ts) => {
                               disabled={priceD === undefined || priceD === ""}
                               className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold bg-green-100 text-green-800 hover:bg-green-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                               title="Save price"
-                            >
-                              <Save className="w-3 h-3" />
-                            </button>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="number"
-                              min="0"
-                              step="1"
-                              placeholder="Stock"
-                              value={stockD ?? currentStock}
-                              onChange={(e) => setStockDraft((d) => ({ ...d, [item.id]: e.target.value }))}
-                              onKeyDown={(e) => { if (e.key === "Enter") saveStock(item.id); }}
-                              className="w-20 bg-green-50 border border-green-300 rounded-lg px-2 py-1.5 text-sm text-green-950 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                            />
-                            <button
-                              onClick={() => saveStock(item.id)}
-                              disabled={stockD === undefined || stockD === ""}
-                              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold bg-emerald-100 text-emerald-800 hover:bg-emerald-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                              title="Save stock"
                             >
                               <Save className="w-3 h-3" />
                             </button>
