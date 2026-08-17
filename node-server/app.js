@@ -15,10 +15,12 @@ const app = express();
 // Parse allowed origins from env (comma-separated), trimming whitespace so
 // entries like "http://localhost:5173, http://192.168.29.241:5173" work.
 // Defaults cover local dev on both localhost and the LAN IP.
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://192.168.29.241:5173")
+// Add your live production domains into the fallback string
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://192.168.29.241:5173,https://semiskitchen.in,https://semiskitchen.in")
   .split(",")
   .map((o) => o.trim())
   .filter(Boolean);
+
 
 app.use(cors({
   origin: allowedOrigins,
