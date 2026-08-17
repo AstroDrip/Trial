@@ -21,6 +21,7 @@ const app = express();
 // a www vs. bare domain separately if you use both.
 const DEFAULT_ORIGINS = [
   "https://trial-tetrix1.vercel.app",
+  "https://semiskitchen.vercel.app",
   "https://semiskitchen.in",
   "https://www.semiskitchen.in",
   "http://localhost:5173",
