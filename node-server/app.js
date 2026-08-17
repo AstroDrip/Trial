@@ -14,17 +14,33 @@ const app = express();
 
 // Parse allowed origins from env (comma-separated), trimming whitespace so
 // entries like "http://localhost:5173, http://192.168.29.241:5173" work.
-// Defaults cover local dev on both localhost and the LAN IP.
-// Add your live production domains into the fallback string
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://192.168.29.241:5173,https://semiskitchen.in,https://semiskitchen.in")
-  .split(",")
-  .map((o) => o.trim())
-  .filter(Boolean);
+// 1. Explicitly list all authorized dev and production domains
+const allowedOrigins = [
+  "https://semiskitchen.in",
+  "https://www.semiskitchen.in",
+  "http://localhost:5173",
+  "http://192.168.29.241:5173"
+];
 
-
+// 2. Use a dynamic matching function for multi-domain support
 app.use(cors({
-  origin: allowedOrigins,
+  origin: function (origin, callback) {
+    // Allow non-browser requests (like server-to-server, Postman, or mobile tests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      return callback(null, true);
+    } else {
+      return callback(new Error("CORS policy restriction: Domain unauthorized"), false);
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
 }));
+
+// 3. Explicitly intercept browser security handshake preflight checks
+app.options("*", cors());
 
 app.use(express.json());
 
