@@ -13,7 +13,7 @@ import {
 // it defaults to a relative "/api" path, which the Vite dev server proxies to
 // the backend (see vite.config.js). Using a relative path avoids LAN-IP
 // reachability and CORS issues so the site works from any host.
-export const API = import.meta.env.VITE_API_URL || "https://vercel.app";
+export const API = import.meta.env.VITE_API_URL || "/api";
 
 
 /* ---------------------------------------------------------

@@ -12,15 +12,29 @@ const events = require("./utils/events");
 
 const app = express();
 
-// Parse allowed origins from env (comma-separated), trimming whitespace so
-// entries like "http://localhost:5173, http://192.168.29.241:5173" work.
-// 1. Explicitly list all authorized dev and production domains
-const allowedOrigins = [
+// Explicitly list all authorized dev and production domains in this array.
+// To add a new domain WITHOUT a code change, set the ALLOWED_ORIGINS env var
+// on the backend deployment (Vercel -> the project -> Settings -> Environment
+// Variables) to a comma-separated list extra origins, e.g.
+//   ALLOWED_ORIGINS=https://trial-tetrix1.vercel.app
+// Origins are matched exactly (scheme + host + port), so include https:// and
+// a www vs. bare domain separately if you use both.
+const DEFAULT_ORIGINS = [
+  "https://trial-tetrix1.vercel.app",
   "https://semiskitchen.in",
   "https://www.semiskitchen.in",
   "http://localhost:5173",
   "http://192.168.29.241:5173"
 ];
+
+// Append any extra origins from env (comma-separated), trimming whitespace so
+// entries like "http://localhost:5173, https://trial-tetrix1.vercel.app" work.
+const allowedOrigins = DEFAULT_ORIGINS.concat(
+  (process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 
 // 2. Use a dynamic matching function for multi-domain support
 app.use(cors({
@@ -39,8 +53,9 @@ app.use(cors({
   allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
 }));
 
-// 3. Explicitly intercept browser security handshake preflight checks
-app.options("*", cors());
+// 3. Explicitly intercept browser security handshake preflight checks.
+// (Express 5 / path-to-regexp v8 requires a NAMED splat instead of a bare "*")
+app.options("/*splat", cors());
 
 app.use(express.json());
 
