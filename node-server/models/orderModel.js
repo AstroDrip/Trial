@@ -138,7 +138,9 @@ async function updateOrderStatus(id, status) {
 
   const result = await db.query(
     `UPDATE orders o SET status = $1 WHERE o.id = $2
-     RETURNING o.*, (SELECT phone FROM customers WHERE id = o.customer_id) AS customer_phone`,
+     RETURNING o.*,
+       (SELECT phone FROM customers WHERE id = o.customer_id) AS customer_phone,
+       (SELECT name FROM customers WHERE id = o.customer_id) AS customer_name`,
     [status, id]
   );
   const updated = result.rows[0];

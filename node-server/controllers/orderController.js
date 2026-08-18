@@ -66,7 +66,7 @@ const updateOrderStatus = async (req, res) => {
       } else {
         try {
           const invoiceUrl = `${process.env.PUBLIC_API_BASE_URL}/api/invoices/${order.id}`;
-          await sendInvoiceNotification(order.customer_phone, invoiceUrl, order.total);
+          await sendInvoiceNotification(order.customer_phone, order.customer_name || "Customer", invoiceUrl, order.total);
         } catch (err) {
           console.error(`❌ Failed to send accepted-order WhatsApp notification for ${order.id}:`, err.message);
         }
@@ -76,7 +76,7 @@ const updateOrderStatus = async (req, res) => {
         console.warn(`⚠️ Order ${order.id} has no phone on file — skipped WhatsApp decline notification`);
       } else {
         try {
-          await sendDeclineNotification(order.customer_phone);
+          await sendDeclineNotification(order.customer_phone, order.customer_name || "Customer");
         } catch (err) {
           console.error(`❌ Failed to send declined-order WhatsApp notification for ${order.id}:`, err.message);
         }
