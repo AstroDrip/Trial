@@ -1,6 +1,7 @@
 const orderModel = require("../models/orderModel");
 const salesModel = require("../models/salesModel");
 const { sendInvoiceNotification, sendDeclineNotification } = require("../utils/whatsappNotify");
+const { sendNewOrderNotification } = require("../utils/emailNotify");
 
 const getOrders = async (req, res) => {
   try {
@@ -21,6 +22,16 @@ const order = await orderModel.createOrder({
       id, invoiceId, customer, items, total, status,
       orderMode, notes: customer?.notes, paymentStatus,
     });
+
+    // Notify the admin by email that a new order arrived. Awaiting the send
+    // makes sure it completes before this serverless function returns (a
+    // fire-and-forget call could be killed mid-flight) — but a send failure
+    // never fails the order itself, it's only logged.
+    try {
+      await sendNewOrderNotification();
+    } catch (err) {
+      console.error("❌ Failed to send admin new-order email:", err.message);
+    }
 
     res.status(201).json({ success: true, data: order });
   } catch (err) {

@@ -8,7 +8,6 @@ const menuRoutes = require("./routes/menuRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const salesRoutes = require("./routes/salesRoutes");
 const invoiceRoutes = require("./routes/invoiceRoutes");
-const events = require("./utils/events");
 
 const app = express();
 
@@ -70,70 +69,6 @@ app.get("/", (req, res) => {
   res.json({
     success: true,
     message: "Semis Kitchen API is running"
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Real-time event stream (Server-Sent Events) for the admin dashboard.
-// On connect, the client sends `Last-Event-ID` (either a header or a query
-// param `?last=`). We replay any events persisted after that id, then stream
-// new events live. This keeps the admin UI event-driven (no polling) while
-// remaining correct even across multiple Vercel serverless instances.
-// ---------------------------------------------------------------------------
-app.get("/api/events", async (req, res) => {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering on Vercel/NGINX
-  res.flushHeaders?.();
-
-  // Let the client send heartbeats so idle connections aren't killed.
-  const send = (data) => {
-    try {
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    } catch {}
-  };
-
-  const lastEventId = req.query.last || req.headers["last-event-id"] || 0;
-
-  // Replay missed events from the shared outbox (cross-instance safety).
-  try {
-    const missed = await events.fetchSince(lastEventId);
-    for (const evt of missed) {
-      res.write(`id: ${evt.id}\n`);
-      send({ type: evt.type, payload: evt.payload });
-    }
-  } catch (err) {
-    console.warn("⚠️ SSE replay error:", err.message);
-  }
-
-  // Sentinel marking "replay finished, everything from here is live". No
-  // `id:` line — it isn't a real outbox event, so it shouldn't advance the
-  // client's Last-Event-ID. Lets the admin dashboard tell catch-up events
-  // (missed while the tab was closed) apart from ones arriving in real time,
-  // so it can batch them into a single "N orders came in while you were
-  // away" notice instead of re-pinging once per missed order.
-  send({ type: "replay_complete" });
-
-  // Live subscription for this instance.
-  const unsubscribe = events.subscribe((evt) => {
-    res.write(`id: ${evt.id}\n`);
-    send({ type: evt.type, payload: evt.payload });
-  });
-
-  // Heartbeat to keep the connection alive.
-  const heartbeat = setInterval(() => {
-    try {
-      res.write(": ping\n\n");
-    } catch {}
-  }, 25000);
-
-  req.on("close", () => {
-    clearInterval(heartbeat);
-    unsubscribe();
-    try {
-      res.end();
-    } catch {}
   });
 });
 

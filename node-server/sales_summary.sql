@@ -45,9 +45,10 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ;
 
 -- ---------------------------------------------------------------------------
--- Real-time event outbox used by the SSE system (utils/events.js). This lets
--- the event-driven admin dashboard replay missed events across multiple
--- Vercel serverless instances (since each instance is stateless).
+-- LEGACY: realtime_events table from the old SSE notification system.
+-- The SSE system was replaced by admin email notifications (utils/emailNotify.js),
+-- so this table is no longer used by any code. Kept here (idempotent) only so
+-- existing databases don't break; safe to ignore or drop.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS realtime_events (
   id BIGSERIAL PRIMARY KEY,

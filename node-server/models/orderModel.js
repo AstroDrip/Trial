@@ -1,5 +1,4 @@
 const db = require("../config/db");
-const events = require("../utils/events");
 
 // Shared SQL fragment for the order row (for getOrders / getArchivedOrders).
 const ORDER_SELECT = `
@@ -79,9 +78,6 @@ order = await insertOrder(client, { id, invoiceId, customer, items, total, statu
     }
 
     await client.query("COMMIT");
-
-    // Notify all connected admin dashboards in real time.
-    events.emit("order_created", { id: order.id, invoiceId: order.invoice_id });
 
     return { ...order, customer, items };
   } catch (err) {

@@ -1,5 +1,4 @@
 const db = require("../config/db");
-const events = require("../utils/events");
 
 // Aggregate sales from the sales_summary table.
 // Expects a row per summary_date with orders_count and revenue.
@@ -29,7 +28,6 @@ async function upsertSummary({ date, ordersDelta = 0, revenueDelta = 0 }) {
     `,
 [date, ordersDelta, revenueDelta]
   );
-  events.emit("sales_updated", { date, row: result.rows[0] });
   return result.rows[0];
 }
 
