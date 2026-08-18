@@ -181,7 +181,7 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
 
         <div className="relative max-w-5xl mx-auto px-4 py-10 sm:py-12 w-full">
           <div
-            className="text-amber-300 tracking-tight uppercase text-4xl sm:text-5xl mb-3"
+            className="text-center text-amber-300 tracking-tight uppercase text-4xl sm:text-5xl mb-3"
             style={{ fontFamily: "'Fraunces', serif", fontWeight: 700 }}
           >
             Semi's Kitchen
@@ -412,6 +412,11 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
                 </button>
               ))}
             </div>
+{form.mode === "Delivery" && (
+              <p className="mb-4 text-sm text-amber-300/90 bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2">
+                Delivery charge is not included in the bill.
+              </p>
+            )}
 <div className="mb-4">
               <div className="flex gap-2">
                 {[
