@@ -443,11 +443,12 @@ export function downloadInvoice(orderId) {
 
 /* Open a customer WhatsApp chat with the branded public invoice link and the
    manual thank-you message. This does not call the Meta/WhatsApp API. */
-export function shareInvoiceOnWhatsApp(orderId, customerPhone) {
+export async function shareInvoiceOnWhatsApp(orderId, customerPhone) {
   let digits = String(customerPhone || "").replace(/\D/g, "");
   if (digits.length === 10) digits = `91${digits}`;
 
   const invoiceUrl = `https://semiskitchen.in/invoice/${encodeURIComponent(orderId)}`;
+  const qrUrl = "https://semiskitchen.in/upi-qr.jpeg";
   const message = `Thank you for choosing Semi’s Kitchen! ❤️
 
 We truly appreciate your order and the trust you’ve placed in us. Every dish is prepared with care, love, and attention to detail.
@@ -457,8 +458,28 @@ Thank you for supporting Semi’s Kitchen. 🍽️✨
 
 Your invoice: ${invoiceUrl}`;
 
+  // On supported mobile browsers, use the native share sheet with the QR as
+  // an actual image attachment. The admin can then choose WhatsApp and the
+  // customer receives both the message and the QR image together.
+  try {
+    const response = await fetch(qrUrl);
+    if (!response.ok) throw new Error("QR image unavailable");
+    const qrBlob = await response.blob();
+    const qrFile = new File([qrBlob], "semis-kitchen-upi-qr.jpeg", { type: "image/jpeg" });
+    const shareData = { title: "Semi's Kitchen invoice", text: message, files: [qrFile] };
+    if (navigator.share && navigator.canShare?.(shareData)) {
+      await navigator.share(shareData);
+      return;
+    }
+  } catch (err) {
+    if (err?.name === "AbortError") return;
+  }
+
+  // Desktop/older-browser fallback: open the customer's WhatsApp chat with
+  // both public links. The QR link can be opened or forwarded manually.
+  const fallbackMessage = `${message}\n\nUPI payment QR: ${qrUrl}`;
   const recipient = digits ? `/${digits}` : "";
-  window.open(`https://wa.me${recipient}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+  window.open(`https://wa.me${recipient}?text=${encodeURIComponent(fallbackMessage)}`, "_blank", "noopener,noreferrer");
 }
 
 /* Download a ZIP of one PDF per accepted order. */

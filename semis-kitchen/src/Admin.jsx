@@ -674,7 +674,7 @@ const [section, setSection] = useState("orders");
 
         {section === "invoices" && (() => {
           const invoiceSource = allInvoiceOrders
-            .filter((o) => o.status === "completed" && inRange(o))
+            .filter((o) => (o.status === "accepted" || o.status === "completed") && inRange(o))
             .sort((a, b) => b.createdAt - a.createdAt);
 
           // Search filter by order id or invoice id
@@ -732,7 +732,7 @@ const weekLabel = (ts) => {
                 <div>
                   <h2 className="text-green-950 text-lg font-semibold" style={{ fontFamily: "'Fraunces', serif" }}>Invoices</h2>
 <p className="text-green-800/50 text-xs mt-0.5">
-                    {searched.length} completed {searched.length === 1 ? "order" : "orders"} &middot; {invoiceGroup === "day" ? "grouped by day" : invoiceGroup === "week" ? "grouped by week" : "newest first"}
+                    {searched.length} accepted or completed {searched.length === 1 ? "order" : "orders"} &middot; {invoiceGroup === "day" ? "grouped by day" : invoiceGroup === "week" ? "grouped by week" : "newest first"}
                   </p>
                 </div>
 <div className="flex flex-wrap items-center gap-2">
@@ -842,7 +842,7 @@ const weekLabel = (ts) => {
 {((invoiceGroup !== "recent" && groups.length === 0) || (invoiceGroup === "recent" && searched.length === 0)) && (
                     <div className="text-center py-16 text-green-800/50">
                       <FileText className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                      {q || invRange !== "all" ? "No invoices match your filters." : "No completed orders yet."}
+                      {q || invRange !== "all" ? "No invoices match your filters." : "No accepted or completed orders yet."}
                     </div>
                   )}
 

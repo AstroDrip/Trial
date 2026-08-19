@@ -4,7 +4,6 @@ const { PDFDocument, rgb } = require("pdf-lib");
 const fontkit = require("@pdf-lib/fontkit");
 
 const TEMPLATE_PATH = path.join(__dirname, "templates", "E_BILL.pdf");
-const UPI_QR_PATH = path.join(__dirname, "templates", "UPI_QR.jpeg");
 const FONT_REGULAR_PATH = path.join(__dirname, "fonts", "OpenSans-Regular.ttf");
 const FONT_BOLD_PATH = path.join(__dirname, "fonts", "OpenSans-Bold.ttf");
 
@@ -40,7 +39,6 @@ const LAYOUT = {
 
 const FONT_SIZE = 10;
 const INK = rgb(0.13, 0.13, 0.13);
-const UPI_QR_SIZE = 118;
 
 function money(n) {
   return Number(n).toFixed(2);
@@ -119,7 +117,6 @@ async function generateInvoicePDF(order) {
   // in visual sync with the bold keys instead of a mismatched system font.
   const font = await out.embedFont(fs.readFileSync(FONT_REGULAR_PATH));
   const fontBold = await out.embedFont(fs.readFileSync(FONT_BOLD_PATH));
-  const upiQr = await out.embedJpg(fs.readFileSync(UPI_QR_PATH));
 
   const { table } = LAYOUT;
   const pages = [];
@@ -160,29 +157,6 @@ async function generateInvoicePDF(order) {
     if (isLastPage) {
       drawTextLeft(page, fontBold, paymentLabel(order.payment_method), LAYOUT.paymentMethod.x, LAYOUT.paymentMethod.yTop, pageHeight);
       drawTextRight(page, fontBold, money(order.total), LAYOUT.total.rightX, LAYOUT.total.yTop, pageHeight, 11);
-
-      // Keep the supplied UPI QR on the final invoice page only. It sits in
-      // the unused footer area below the payment summary and remains large
-      // enough to scan from either a phone screen or a printed invoice.
-      const { width: pageWidth } = page.getSize();
-      const qrX = (pageWidth - UPI_QR_SIZE) / 2;
-      const qrY = 35;
-      const label = "Scan to pay with UPI";
-      const labelSize = 9;
-      const labelWidth = fontBold.widthOfTextAtSize(label, labelSize);
-      page.drawText(label, {
-        x: (pageWidth - labelWidth) / 2,
-        y: qrY + UPI_QR_SIZE + 8,
-        size: labelSize,
-        font: fontBold,
-        color: INK,
-      });
-      page.drawImage(upiQr, {
-        x: qrX,
-        y: qrY,
-        width: UPI_QR_SIZE,
-        height: UPI_QR_SIZE,
-      });
     }
   }
 
