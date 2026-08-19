@@ -95,15 +95,21 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
 
   // Effective price: prefer admin override stored in inventory, else MENU price
   const priceOf = (item) => (inventory[item.id]?.price != null ? inventory[item.id].price : item.price);
+  // Inventory normally comes from /api/inventory. The menu endpoint also
+  // includes stock, so use it as a fallback while inventory is still loading.
+  const stockOf = (item) => {
+    const stock = Number(inventory[item.id]?.stock ?? item.stock);
+    return Number.isFinite(stock) && stock >= 0 ? stock : null;
+  };
 
   const addItem = (item) => {
     if (!isAvailable(item.id)) return;
     const step = item.step || 1;
     const minQty = item.minQty || step;
-    const availableStock = Number(inventory[item.id]?.stock);
+    const availableStock = stockOf(item);
     const currentQty = cart[item.id] || 0;
     const proposedQty = currentQty === 0 ? minQty : currentQty + step;
-    if (Number.isFinite(availableStock) && proposedQty > availableStock) {
+    if (availableStock !== null && proposedQty > availableStock) {
       setStockError(item.id);
       return;
     }
@@ -111,7 +117,7 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
     setCart((c) => {
       const current = c[item.id] || 0;
       const next = current === 0 ? minQty : current + step;
-      if (Number.isFinite(availableStock) && next > availableStock) return c;
+      if (availableStock !== null && next > availableStock) return c;
       return { ...c, [item.id]: Math.round(next * 100) / 100 };
     });
   };
@@ -137,8 +143,17 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
     .filter(Boolean);
   const cartCount = cartLines.reduce((s, l) => s + l.qty, 0);
   const cartTotal = cartLines.reduce((s, l) => s + l.qty * l.price, 0);
+  const overstockedLine = cartLines.find((line) => {
+    const stock = stockOf(line);
+    return stock !== null && line.qty > stock;
+  });
 
   const submitOrder = async () => {
+    if (overstockedLine) {
+      setStockError(overstockedLine.id);
+      setErrorMsg(`Insufficient stock for ${overstockedLine.name}. Only ${stockOf(overstockedLine)} available.`);
+      return;
+    }
     const hasLocation = form.location?.lat != null && form.location?.lng != null;
     if (
       !form.name.trim() ||
@@ -195,8 +210,8 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
 
       {/* Hero */}
       <header className="relative overflow-hidden bg-[#F6EDD7]">
-        <nav className="relative z-10 max-w-6xl mx-auto px-5 sm:px-8 py-5 flex items-center justify-center text-center">
-          <a href="#top" className="text-2xl sm:text-3xl text-[#3F3B24]" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>
+        <nav className="relative z-10 w-full px-5 sm:px-8 py-5 flex items-center justify-center text-center bg-[#6F6F32] shadow-[0_8px_24px_rgba(63,59,36,0.12)]">
+          <a href="#top" className="text-2xl sm:text-3xl text-[#FFF8E8]" style={{ fontFamily: "'Fraunces', serif", fontWeight: 700 }}>
             SEMI'S KITCHEN
           </a>
         </nav>
@@ -323,7 +338,7 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
                     {!available && <div className="text-red-400 text-xs mt-1 font-medium">Sold out today</div>}
                     {stockError === item.id && (
                       <div className="text-red-600 text-xs mt-1 font-semibold" role="alert">
-                        Insufficient stock. Only {inventory[item.id]?.stock ?? 0} available.
+                        Insufficient stock. Only {stockOf(item) ?? 0} available.
                       </div>
                     )}
                   </div>
@@ -395,7 +410,7 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
                   <div className="text-right text-sm text-amber-400 font-semibold">{rupee(l.qty * l.price)}</div>
                   {stockError === l.id && (
                     <div className="text-right text-red-600 text-xs font-semibold" role="alert">
-                      Insufficient stock. Only {inventory[l.id]?.stock ?? 0} available.
+                      Insufficient stock. Only {stockOf(l) ?? 0} available.
                     </div>
                   )}
                 </div>
@@ -408,7 +423,14 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
                   <span className="text-amber-400">{rupee(cartTotal)}</span>
                 </div>
                 <button
-                  onClick={() => { setCartOpen(false); setCheckoutOpen(true); }}
+                  onClick={() => {
+                    if (overstockedLine) {
+                      setStockError(overstockedLine.id);
+                      return;
+                    }
+                    setCartOpen(false);
+                    setCheckoutOpen(true);
+                  }}
                   className="w-full py-3 rounded-lg bg-amber-400 text-green-950 font-semibold hover:bg-amber-300 transition-colors"
                 >
                   Proceed to checkout
