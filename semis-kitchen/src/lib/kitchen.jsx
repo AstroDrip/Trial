@@ -441,6 +441,26 @@ export function downloadInvoice(orderId) {
   window.open(`${API}/invoices/${encodeURIComponent(orderId)}`, "_blank");
 }
 
+/* Open a customer WhatsApp chat with the branded public invoice link and the
+   manual thank-you message. This does not call the Meta/WhatsApp API. */
+export function shareInvoiceOnWhatsApp(orderId, customerPhone) {
+  let digits = String(customerPhone || "").replace(/\D/g, "");
+  if (digits.length === 10) digits = `91${digits}`;
+
+  const invoiceUrl = `https://semiskitchen.in/invoice/${encodeURIComponent(orderId)}`;
+  const message = `Thank you for choosing Semi’s Kitchen! ❤️
+
+We truly appreciate your order and the trust you’ve placed in us. Every dish is prepared with care, love, and attention to detail.
+
+We hope you enjoy every bite!
+Thank you for supporting Semi’s Kitchen. 🍽️✨
+
+Your invoice: ${invoiceUrl}`;
+
+  const recipient = digits ? `/${digits}` : "";
+  window.open(`https://wa.me${recipient}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+}
+
 /* Download a ZIP of one PDF per accepted order. */
 export function downloadAllInvoices() {
   const a = document.createElement("a");

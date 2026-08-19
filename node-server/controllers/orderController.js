@@ -3,6 +3,12 @@ const salesModel = require("../models/salesModel");
 const { sendInvoiceNotification, sendDeclineNotification } = require("../utils/whatsappNotify");
 const { sendNewOrderNotification } = require("../utils/emailNotify");
 
+// Meta/WhatsApp notifications are paused by default. The integration code is
+// intentionally retained and can be re-enabled later by setting this exact
+// environment variable to "true" in the backend deployment.
+const WHATSAPP_NOTIFICATIONS_ENABLED =
+  process.env.WHATSAPP_NOTIFICATIONS_ENABLED === "true";
+
 const getOrders = async (req, res) => {
   try {
     const orders = await orderModel.getOrders();
@@ -69,7 +75,7 @@ const updateOrderStatus = async (req, res) => {
     // serverless function returns, rather than risking being killed
     // mid-flight — but a WhatsApp failure never fails the status update
     // itself, it's only logged.
-    if (status === "accepted" && order.previousStatus !== "accepted") {
+    if (WHATSAPP_NOTIFICATIONS_ENABLED && status === "accepted" && order.previousStatus !== "accepted") {
       if (!order.customer_phone) {
         console.warn(`⚠️ Order ${order.id} has no phone on file — skipped WhatsApp invoice notification`);
       } else if (!process.env.PUBLIC_API_BASE_URL) {
@@ -82,7 +88,7 @@ const updateOrderStatus = async (req, res) => {
           console.error(`❌ Failed to send accepted-order WhatsApp notification for ${order.id}:`, err.message);
         }
       }
-    } else if (status === "declined" && order.previousStatus !== "declined") {
+    } else if (WHATSAPP_NOTIFICATIONS_ENABLED && status === "declined" && order.previousStatus !== "declined") {
       if (!order.customer_phone) {
         console.warn(`⚠️ Order ${order.id} has no phone on file — skipped WhatsApp decline notification`);
       } else {

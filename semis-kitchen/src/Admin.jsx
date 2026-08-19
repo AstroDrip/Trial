@@ -39,6 +39,7 @@ decrementStockApi,
   deliverySlotLabel,
   deliveryDateLabel,
   downloadInvoice,
+  shareInvoiceOnWhatsApp,
   downloadAllInvoices,
   syncToSheets,
 } from "./lib/kitchen.jsx";
@@ -873,7 +874,13 @@ const weekLabel = (ts) => {
                               </div>
                             ))}
                           </div>
-                          <div className="flex justify-end mt-3 pt-3 border-t border-green-100">
+                          <div className="flex flex-wrap justify-end gap-2 mt-3 pt-3 border-t border-green-100">
+                            <button
+                              onClick={() => shareInvoiceOnWhatsApp(o.id, o.customer.phone)}
+                              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-green-300 text-green-800 hover:bg-green-50"
+                            >
+                              <Share2 className="w-3.5 h-3.5" /> Share on WhatsApp
+                            </button>
                             <button
                               onClick={() => downloadInvoice(o.id)}
                               className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-amber-300 text-amber-700 hover:bg-amber-50"
@@ -923,7 +930,13 @@ const weekLabel = (ts) => {
                                       </div>
                                     ))}
                                   </div>
-                                  <div className="flex justify-end mt-3 pt-3 border-t border-green-100">
+                                  <div className="flex flex-wrap justify-end gap-2 mt-3 pt-3 border-t border-green-100">
+                                    <button
+                                      onClick={() => shareInvoiceOnWhatsApp(o.id, o.customer.phone)}
+                                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-green-300 text-green-800 hover:bg-green-50"
+                                    >
+                                      <Share2 className="w-3.5 h-3.5" /> Share on WhatsApp
+                                    </button>
                                     <button
                                       onClick={() => downloadInvoice(o.id)}
                                       className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-amber-300 text-amber-700 hover:bg-amber-50"
