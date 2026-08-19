@@ -4,3 +4,34 @@
 @import "leaflet/dist/leaflet.css";
 .leaflet-container { z-index: 0; }
 
+html { scroll-behavior: smooth; }
+body { margin: 0; background: #F6EDD7; }
+
+/* Customer-only editorial theme. Admin keeps its existing green palette. */
+.customer-editorial .bg-green-950 { background-color: #fff8e8; }
+.customer-editorial .bg-green-950\/95 { background-color: rgb(255 248 232 / 0.95); }
+.customer-editorial .bg-green-900\/60,
+.customer-editorial .bg-green-900\/40 { background-color: rgb(246 237 215 / 0.62); }
+.customer-editorial .bg-green-900 { background-color: #f6edd7; }
+.customer-editorial .bg-green-800 { background-color: #e8d7b5; }
+.customer-editorial .border-green-900,
+.customer-editorial .border-green-900\/60,
+.customer-editorial .border-green-800 { border-color: #e8d7b5; }
+.customer-editorial .text-stone-50,
+.customer-editorial .text-stone-100,
+.customer-editorial .text-stone-200,
+.customer-editorial .text-stone-300 { color: #3f3b24; }
+.customer-editorial .text-stone-400,
+.customer-editorial .text-stone-500,
+.customer-editorial .text-stone-600 { color: #6f6657; }
+.customer-editorial .text-amber-300,
+.customer-editorial .text-amber-400 { color: #c8754f; }
+.customer-editorial .bg-amber-400 { background-color: #6f6f32; }
+.customer-editorial .hover\:bg-amber-300:hover { background-color: #575726; }
+.customer-editorial .text-green-950 { color: #fff8e8; }
+.customer-editorial .border-amber-400 { border-color: #6f6f32; }
+.customer-editorial .focus\:ring-amber-400:focus { --tw-ring-color: #c8754f; }
+.customer-editorial input,
+.customer-editorial textarea,
+.customer-editorial select { color-scheme: light; }
+

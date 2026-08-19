@@ -120,17 +120,17 @@ export default function LocationPicker({ value, onChange, initial = DEFAULT_CENT
   };
 
   return (
-    <div className="border border-green-800 bg-green-900/40">
-      <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-green-800">
-        <div className="flex items-center gap-1.5 text-stone-200 text-sm font-medium">
-          <MapPin className="w-4 h-4 text-amber-400" />
+    <div className="rounded-xl overflow-hidden border border-[#E8D7B5] bg-[#FFF8E8]">
+      <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-[#E8D7B5]">
+        <div className="flex items-center gap-1.5 text-[#3F3B24] text-sm font-medium">
+          <MapPin className="w-4 h-4 text-[#C8754F]" />
           Pin where to deliver
         </div>
         <button
           type="button"
           onClick={useMyLocation}
           disabled={locating}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-400 text-green-950 text-xs font-semibold hover:bg-amber-300 transition-colors disabled:opacity-60"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#6F6F32] text-[#FFF8E8] text-xs font-semibold hover:bg-[#575726] transition-colors disabled:opacity-60"
         >
           {locating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LocateFixed className="w-3.5 h-3.5" />}
           {locating ? "Locating…" : "Use my location"}
@@ -140,7 +140,7 @@ export default function LocationPicker({ value, onChange, initial = DEFAULT_CENT
       <div ref={mapElRef} className="w-full h-64 md:h-72" />
 
       <div className="px-3.5 py-3 space-y-1.5">
-        <label className="text-xs text-stone-400">Delivery address (auto-filled from pin)</label>
+        <label className="text-xs text-[#6F6657]">Delivery address (auto-filled from pin)</label>
         <textarea
           value={addr}
           onChange={(e) => {
@@ -149,10 +149,10 @@ export default function LocationPicker({ value, onChange, initial = DEFAULT_CENT
           }}
           rows={2}
           placeholder="Address appears here when you drop the pin or use your location. You can edit it."
-          className="w-full bg-green-900/60 border border-green-800 rounded-lg px-3 py-2 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
+          className="w-full bg-[#FFFCF3] border border-[#E8D7B5] rounded-lg px-3 py-2 text-sm text-[#3F3B24] placeholder-[#9A8E7B] focus:outline-none focus:ring-2 focus:ring-[#C8754F] resize-none"
         />
         {value?.lat != null && value?.lng != null && (
-          <p className="text-[11px] text-stone-500 font-mono">
+          <p className="text-[11px] text-[#8A806F] font-mono">
             Lat: {value.lat.toFixed(6)}, Lng: {value.lng.toFixed(6)}
           </p>
         )}

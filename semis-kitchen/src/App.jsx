@@ -18,8 +18,6 @@ import {
   loadMenuStored,
   loadInventory,
   createOrder,
-  loadHeroImages,
-  getFolderHeroImages,
 } from "./lib/kitchen.jsx";
 import LocationPicker from "./components/LocationPicker.jsx";
 
@@ -51,7 +49,7 @@ const IS_IOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navig
 /* ---------------------------------------------------------
    Customer: Menu + Cart + Checkout
 --------------------------------------------------------- */
-function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
+function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
   const [tab, setTab] = useState("fried");
   const [cart, setCart] = useState({});
   const [cartOpen, setCartOpen] = useState(false);
@@ -60,14 +58,38 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
   const [form, setForm] = useState({ name: "", phone: "", address: "", notes: "", mode: "Delivery", location: null, paymentMethod: "cod", deliveryDate: "", deliverySlot: "" });
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [stockError, setStockError] = useState(null);
   const [slide, setSlide] = useState(0);
 
-  const heroCount = heroImages?.length || 0;
+  const menuSlides = useMemo(
+    () => {
+      const seen = new Set();
+      return menu
+        .map((item) => ({ src: resolveImg(item.img), name: item.name }))
+        .filter((item) => {
+          if (!item.src || seen.has(item.src)) return false;
+          seen.add(item.src);
+          return true;
+        });
+    },
+    [menu]
+  );
+  const heroCount = menuSlides.length;
   useEffect(() => {
     if (heroCount <= 1) return;
-    const t = setInterval(() => setSlide((s) => (s + 1) % heroCount), 5000);
+    const t = setInterval(() => {
+      setSlide((current) => {
+        let next = current;
+        while (next === current) next = Math.floor(Math.random() * heroCount);
+        return next;
+      });
+    }, 5000);
     return () => clearInterval(t);
   }, [heroCount]);
+
+  useEffect(() => {
+    if (slide >= heroCount) setSlide(0);
+  }, [heroCount, slide]);
 
   const isAvailable = (id) => inventory[id]?.available !== false;
 
@@ -78,9 +100,18 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
     if (!isAvailable(item.id)) return;
     const step = item.step || 1;
     const minQty = item.minQty || step;
+    const availableStock = Number(inventory[item.id]?.stock);
+    const currentQty = cart[item.id] || 0;
+    const proposedQty = currentQty === 0 ? minQty : currentQty + step;
+    if (Number.isFinite(availableStock) && proposedQty > availableStock) {
+      setStockError(item.id);
+      return;
+    }
+    setStockError((currentError) => (currentError === item.id ? null : currentError));
     setCart((c) => {
       const current = c[item.id] || 0;
       const next = current === 0 ? minQty : current + step;
+      if (Number.isFinite(availableStock) && next > availableStock) return c;
       return { ...c, [item.id]: Math.round(next * 100) / 100 };
     });
   };
@@ -92,6 +123,7 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
       const minQty = item?.minQty || 1;
       next[id] = Math.round((next[id] - step) * 100) / 100;
       if (next[id] < minQty) delete next[id];
+      setStockError((currentError) => (currentError === id ? null : currentError));
       return next;
     });
   };
@@ -158,78 +190,65 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
   const itemsForTab = useMemo(() => menu.filter((m) => m.cat === tab), [menu, tab]);
 
   return (
-    <div className="min-h-screen bg-green-950 text-stone-100" style={{ fontFamily: "'Work Sans', sans-serif" }}>
+    <div className="customer-editorial min-h-screen bg-[#F6EDD7] text-[#3F3B24]" style={{ fontFamily: "'Work Sans', sans-serif" }}>
       <style>{FONTS}</style>
 
       {/* Hero */}
-      <div className="relative overflow-hidden border-b border-green-900 min-h-[320px] sm:min-h-[380px] flex items-center bg-gradient-to-br from-green-900 to-green-950">
-        {/* Rotating image background */}
-        {heroImages.length > 0 && heroImages.map((src, i) => (
-          <img
-            key={src + i}
-            src={src}
-            alt=""
-            aria-hidden="true"
-            className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-1000 ${
-              i === slide ? "opacity-100" : "opacity-0"
-            }`}
-          />
-        ))}
-        {/* Readability overlays */}
-        <div className="absolute inset-0 bg-gradient-to-r from-green-950 via-green-950/85 to-green-950/30" />
-        <div className="absolute inset-0 bg-gradient-to-t from-green-950 via-transparent to-green-950/40" />
+      <header className="relative overflow-hidden bg-[#F6EDD7]">
+        <nav className="relative z-10 max-w-6xl mx-auto px-5 sm:px-8 py-5 flex items-center justify-center text-center">
+          <a href="#top" className="text-2xl sm:text-3xl text-[#3F3B24]" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>
+            SEMI'S KITCHEN
+          </a>
+        </nav>
 
-        <div className="relative max-w-5xl mx-auto px-4 py-10 sm:py-12 w-full">
-          <div
-            className="text-center text-amber-300 tracking-tight uppercase text-4xl sm:text-5xl mb-3"
-            style={{ fontFamily: "'Fraunces', serif", fontWeight: 700 }}
-          >
-            Semi's Kitchen
+        <div id="top" className="relative max-w-6xl mx-auto px-5 sm:px-8 pt-6 pb-16 sm:pt-12 sm:pb-24 grid lg:grid-cols-[0.95fr_1.05fr] gap-12 lg:gap-16 items-center">
+          <div className="relative z-10 text-center lg:text-left">
+            <h1 className="text-[2.75rem] leading-[1.02] sm:text-6xl lg:text-7xl text-[#3F3B24] tracking-[-0.035em]" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>
+              Authentic Malabar food, made with a little more love.
+            </h1>
+            <p className="mt-6 max-w-xl mx-auto lg:mx-0 text-[#6F6657] text-base sm:text-lg leading-relaxed">
+              Hand-prepared snacks, fragrant biriyanis and comforting curries, made fresh for your table.
+            </p>
+          </div>
+
+          <div className="relative mx-auto w-[84%] sm:w-full max-w-[600px]">
+            <div className="absolute -inset-3 sm:-inset-8 bg-[#D99168] rounded-[42%_58%_55%_45%/48%_42%_58%_52%] rotate-[-4deg]" />
+            <div className="relative aspect-[4/3] sm:aspect-[5/4] overflow-hidden rounded-[38%_62%_52%_48%/45%_40%_60%_55%] shadow-[0_24px_60px_rgba(63,59,36,0.22)]">
+              {menuSlides.length > 0 ? menuSlides.map((item, i) => (
+                <img key={`${item.src}-${i}`} src={item.src} alt={i === slide ? item.name : ""} aria-hidden={i !== slide} className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-1000 ${i === slide ? "opacity-100" : "opacity-0"}`} />
+              )) : (
+                <div className="w-full h-full bg-[#E8D7B5]" />
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Slide indicators */}
-        {heroImages.length > 1 && (
-          <div className="absolute bottom-4 left-0 right-0 flex items-center justify-center gap-2">
-            {heroImages.map((src, i) => (
-              <button
-                key={src + i}
-                onClick={() => setSlide(i)}
-                aria-label={`Show slide ${i + 1}`}
-                className={`h-2 rounded-full transition-all duration-300 ${
-                  i === slide ? "w-6 bg-amber-400" : "w-2 bg-stone-400/70 hover:bg-stone-300"
-                }`}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      </header>
 
       {/* Category tabs */}
-      <div className="sticky top-0 z-20 bg-green-950/95 backdrop-blur border-b border-green-900">
-        <div className="max-w-5xl mx-auto px-4 flex gap-1 overflow-x-auto">
+      <section id="menu" className="bg-[#FFF8E8] pt-14 sm:pt-20">
+        <div className="max-w-5xl mx-auto px-4 flex justify-center gap-2 overflow-x-auto pb-2">
           {CATS.map((c) => {
-            const Icon = c.icon;
             const active = tab === c.id;
             return (
               <button
                 key={c.id}
                 onClick={() => setTab(c.id)}
-                className={`flex items-center gap-1.5 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-                  active ? "border-amber-400 text-amber-300" : "border-transparent text-stone-400 hover:text-stone-200"
+                className={`px-4 sm:px-5 py-2.5 rounded-full text-xs sm:text-sm font-semibold whitespace-nowrap border transition-colors ${
+                  active ? "bg-[#6F6F32] border-[#6F6F32] text-[#FFF8E8]" : "border-[#E8D7B5] text-[#6F6657] hover:border-[#C8754F] hover:text-[#3F3B24]"
                 }`}
               >
-                <Icon className="w-4 h-4" /> {c.name}
+                {c.name}
               </button>
             );
           })}
         </div>
-      </div>
+      </section>
 
       {/* Menu grid */}
-      <main className="max-w-5xl mx-auto px-4 py-6 pb-28">
+      <main className="max-w-6xl mx-auto px-4 sm:px-8 pt-8 pb-32 bg-[#FFF8E8]">
         {tab === "mains" && (
-          <p className="mb-4 text-sm text-amber-300/90 bg-amber-400/10 border border-amber-400/30 rounded-lg px-3.5 py-2.5">
+          <p className="mb-6 text-sm text-[#7D4A32] bg-[#D99168]/15 border border-[#C8754F]/25 rounded-2xl px-4 py-3 text-center">
             Please note: same-day delivery is not available for Biriyani &amp; Curry items.
           </p>
         )}
@@ -264,23 +283,23 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
             </div>
           )
         ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
           {itemsForTab.map((item) => {
             const available = isAvailable(item.id);
             const qty = cart[item.id] || 0;
             return (
               <div
                 key={item.id}
-                className={`rounded-xl border border-green-900 bg-green-900/40 overflow-hidden ${
+                className={`group rounded-[1.5rem] border border-[#E8D7B5]/80 bg-[#FFFCF3] overflow-hidden shadow-[0_10px_28px_rgba(82,67,43,0.07)] transition-transform duration-300 hover:-translate-y-1 ${
                   !available ? "opacity-50" : ""
                 }`}
               >
                 {/* Item image */}
-                <div className="w-full h-36 bg-green-900 overflow-hidden">
+                <div className="w-full h-48 sm:h-52 bg-[#E8D7B5] overflow-hidden">
                   <img
                     src={resolveImg(item.img)}
                     alt={item.name}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
                     onError={(e) => {
                       e.target.style.display = "none";
                       e.target.nextElementSibling?.classList.remove("hidden");
@@ -292,16 +311,21 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
                 </div>
                 <div className="p-4 flex items-center justify-between gap-3">
                   <div>
-                    <div className="font-medium text-stone-50">
+                  <div className="text-lg text-[#3F3B24]" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>
                       {item.name}
                       <span className="text-stone-500 text-xs ml-1.5">{item.unit}</span>
                     </div>
-                    <div className="text-amber-400 text-sm mt-0.5">
+                    <div className="text-[#C8754F] text-sm font-semibold mt-1">
                       {rupee(priceOf(item))}
                       {item.minQty > 1 && <span className="text-stone-500 text-xs ml-1.5">· min {item.minQty}</span>}
                       {item.seasonal && <span className="text-stone-500 text-xs ml-1.5">· seasonal price</span>}
                     </div>
                     {!available && <div className="text-red-400 text-xs mt-1 font-medium">Sold out today</div>}
+                    {stockError === item.id && (
+                      <div className="text-red-600 text-xs mt-1 font-semibold" role="alert">
+                        Insufficient stock. Only {inventory[item.id]?.stock ?? 0} available.
+                      </div>
+                    )}
                   </div>
                   {available ? (
                     qty > 0 ? (
@@ -337,7 +361,7 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
       {cartCount > 0 && !cartOpen && !checkoutOpen && !confirmedOrder && (
         <button
           onClick={() => setCartOpen(true)}
-          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-amber-400 text-green-950 px-5 py-3.5 rounded-full shadow-xl font-semibold hover:bg-amber-300 transition-colors"
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-[#6F6F32] text-[#FFF8E8] px-6 py-3.5 rounded-full shadow-[0_14px_36px_rgba(63,59,36,0.28)] font-semibold hover:bg-[#575726] transition-colors"
         >
           <ShoppingBag className="w-5 h-5" />
           {rupee(cartTotal)}
@@ -369,6 +393,11 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
                     </div>
                   </div>
                   <div className="text-right text-sm text-amber-400 font-semibold">{rupee(l.qty * l.price)}</div>
+                  {stockError === l.id && (
+                    <div className="text-right text-red-600 text-xs font-semibold" role="alert">
+                      Insufficient stock. Only {inventory[l.id]?.stock ?? 0} available.
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -534,8 +563,13 @@ function CustomerApp({ menu, inventory, heroImages, menuState, onRetryMenu }) {
       )}
 
       {/* Footer */}
-      <footer className="py-6 text-center">
-        <span className="font-bold tracking-widest text-green-800 select-none">QOZYD</span>
+      <footer className="relative bg-[#3F3B24] text-[#FFF8E8] px-5 pt-16 pb-10 text-center overflow-hidden">
+        <div className="absolute -top-8 left-[-5%] w-[110%] h-16 bg-[#FFF8E8] rounded-[50%]" aria-hidden="true" />
+        <div className="relative">
+          <div className="text-3xl mb-2" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>Semi's Kitchen</div>
+          <p className="text-[#E8D7B5] text-sm">Malabar snacks &amp; curries, made to order</p>
+          <p className="mt-8 text-xs text-[#E8D7B5]/55">Built by <span className="font-semibold tracking-[0.16em]">QOZYD</span></p>
+        </div>
       </footer>
 
       {/* Confirmation */}
@@ -577,7 +611,6 @@ export default function App() {
   // on the very first visit (no cache yet), same as before.
   const [menu, setMenu] = useState(() => loadMenuStored());
   const [inventory, setInventory] = useState({});
-  const [heroImages, setHeroImages] = useState([]);
   // "ready" if a cached catalog is already onscreen to show, else "loading".
   // Only the very first visit (no cache yet) ever shows the loading skeleton;
   // returning visitors start "ready" and the live refresh just updates in place.
@@ -595,23 +628,15 @@ export default function App() {
     }
   }, []);
   const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
-  const refreshHeroImages = useCallback(async () => {
-    const uploaded = await loadHeroImages();
-    const merged = uploaded.length > 0 ? uploaded : getFolderHeroImages();
-    setHeroImages(merged);
-  }, []);
-
   useEffect(() => {
     refreshMenu();
-    refreshHeroImages();
     refreshInventory();
-  }, [refreshMenu, refreshHeroImages, refreshInventory]);
+  }, [refreshMenu, refreshInventory]);
 
   return (
     <CustomerApp
       menu={menu}
       inventory={inventory}
-      heroImages={heroImages}
       menuState={menuState}
       onRetryMenu={() => refreshMenu()}
     />

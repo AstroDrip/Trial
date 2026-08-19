@@ -108,6 +108,7 @@ const [section, setSection] = useState("orders");
   const [archived, setArchived] = useState([]);
   const [salesSummary, setSalesSummary] = useState([]);
   const [priceDraft, setPriceDraft] = useState({});
+  const [stockDraft, setStockDraft] = useState({});
 
   const refreshMenu = useCallback(async () => setMenu(await loadMenu()), []);
   const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
@@ -240,6 +241,32 @@ const [section, setSection] = useState("orders");
       setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], price: currentPriceOf(itemId) } }));
     }
     setPriceDraft((d) => {
+      const copy = { ...d };
+      delete copy[itemId];
+      return copy;
+    });
+  };
+
+  const saveStock = async (itemId) => {
+    const raw = stockDraft[itemId];
+    if (raw === undefined || raw === "") return;
+    const stock = Number(raw);
+    if (!Number.isInteger(stock) || stock < 0) return;
+    const previousItem = inventory[itemId];
+    // Determine availability: item is available only if stock > 0
+    const available = stock > 0;
+    // Optimistic local update for instant feedback
+    setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], stock, available } }));
+    try {
+      await updateInventoryField(itemId, { stock, available });
+    } catch {
+      // Revert on failure - restore previous stock and availability
+      setInventory((current) => ({
+        ...current,
+        [itemId]: previousItem,
+      }));
+    }
+    setStockDraft((d) => {
       const copy = { ...d };
       delete copy[itemId];
       return copy;
@@ -928,6 +955,7 @@ const weekLabel = (ts) => {
                     const available = inventory[item.id]?.available !== false;
                     const currentPrice = inventory[item.id]?.price ?? item.price;
                     const priceD = priceDraft[item.id];
+                    const stockD = stockDraft[item.id];
                     return (
                       <div key={item.id} className="border border-green-200 bg-white rounded-lg px-3.5 py-2.5 shadow-sm">
                         <div className="flex items-center justify-between gap-2 mb-2">
@@ -962,6 +990,27 @@ const weekLabel = (ts) => {
                               disabled={priceD === undefined || priceD === ""}
                               className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold bg-green-100 text-green-800 hover:bg-green-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                               title="Save price"
+                            >
+                              <Save className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-green-800/60">Stock</span>
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              placeholder="Stock"
+                              value={stockD ?? inventory[item.id]?.stock ?? 0}
+                              onChange={(e) => setStockDraft((d) => ({ ...d, [item.id]: e.target.value }))}
+                              onKeyDown={(e) => { if (e.key === "Enter") saveStock(item.id); }}
+                              className="w-20 bg-green-50 border border-green-300 rounded-lg px-2 py-1.5 text-sm text-green-950 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                            />
+                            <button
+                              onClick={() => saveStock(item.id)}
+                              disabled={stockD === undefined || stockD === ""}
+                              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold bg-green-100 text-green-800 hover:bg-green-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                              title="Save stock"
                             >
                               <Save className="w-3 h-3" />
                             </button>
