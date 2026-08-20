@@ -2,7 +2,9 @@ const { Pool } = require("pg");
 
 const MAX_CONNECTIONS = 2;
 const IDLE_CLIENT_TIMEOUT_MS = 30_000;
-const CONNECTION_TIMEOUT_MS = 10_000;
+// Allow enough time for a sleeping Neon compute to wake up. The customer app
+// renders its bundled menu while this connection is established.
+const CONNECTION_TIMEOUT_MS = 15_000;
 
 function databaseConfig() {
   const connectionString = process.env.DATABASE_URL;
