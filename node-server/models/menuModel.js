@@ -6,7 +6,10 @@ async function getMenu() {
       m.id,
       m.category_id AS cat,
       m.name,
-      m.unit,
+      CASE
+        WHEN m.category_id = 'mains' AND m.min_qty IN (10, 20) THEN '1 Piece'
+        ELSE m.unit
+      END AS unit,
       m.min_qty AS "minQty",
       m.step_qty AS "step",
       m.seasonal,

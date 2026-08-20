@@ -278,7 +278,7 @@ const MENU_SNAPSHOT = [
     "id": "mc-batura",
     "cat": "mains",
     "name": "Batura",
-    "unit": "1 KG",
+    "unit": "1 Piece",
     "minQty": 10,
     "step": 5,
     "seasonal": false,
@@ -564,7 +564,7 @@ const MENU_SNAPSHOT = [
     "id": "mc-kannuvecha-pathiri-fried",
     "cat": "mains",
     "name": "Kannuvecha Pathiri (Fried)",
-    "unit": "1 KG",
+    "unit": "1 Piece",
     "minQty": 20,
     "step": 5,
     "seasonal": false,
@@ -577,7 +577,7 @@ const MENU_SNAPSHOT = [
     "id": "mc-kannuvecha-pathiri-half-cooked",
     "cat": "mains",
     "name": "Kannuvecha Pathiri (Half cooked)",
-    "unit": "1 KG",
+    "unit": "1 Piece",
     "minQty": 20,
     "step": 5,
     "seasonal": false,
@@ -616,7 +616,7 @@ const MENU_SNAPSHOT = [
     "id": "mc-kuboos",
     "cat": "mains",
     "name": "Kuboos",
-    "unit": "1 KG",
+    "unit": "1 Piece",
     "minQty": 10,
     "step": 5,
     "seasonal": false,
@@ -694,7 +694,7 @@ const MENU_SNAPSHOT = [
     "id": "mc-neypathal",
     "cat": "mains",
     "name": "Neypathal",
-    "unit": "1 KG",
+    "unit": "1 Piece",
     "minQty": 10,
     "step": 5,
     "seasonal": false,
@@ -771,4 +771,3 @@ const MENU_SNAPSHOT = [
 ];
 
 export default MENU_SNAPSHOT;
-

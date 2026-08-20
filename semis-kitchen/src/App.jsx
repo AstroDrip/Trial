@@ -376,7 +376,11 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                     </div>
                     <div className="text-[#C8754F] text-sm font-semibold mt-1">
                       {rupee(priceOf(item))}
-                      {item.minQty > 1 && <span className="text-stone-500 text-xs ml-1.5">· min {item.minQty}</span>}
+                      {item.minQty > 1 && (
+                        <span className="text-stone-500 text-xs ml-1.5">
+                          · min {item.minQty}{/piece/i.test(item.unit) ? " pieces" : ""}
+                        </span>
+                      )}
                       {item.seasonal && <span className="text-stone-500 text-xs ml-1.5">· seasonal price</span>}
                     </div>
                     {!available && <div className="text-red-400 text-xs mt-1 font-medium">Sold out today</div>}
