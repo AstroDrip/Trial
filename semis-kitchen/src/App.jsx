@@ -58,6 +58,7 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
   const [errorMsg, setErrorMsg] = useState("");
   const [stockError, setStockError] = useState(null);
   const [slide, setSlide] = useState(0);
+  const [previousSlide, setPreviousSlide] = useState(null);
 
   const menuSlides = useMemo(
     () => {
@@ -84,7 +85,10 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
     const preload = new Image();
     preload.src = menuSlides[next].src;
 
-    const timer = setTimeout(() => setSlide(next), 5000);
+    const timer = setTimeout(() => {
+      setPreviousSlide(activeSlide);
+      setSlide(next);
+    }, 5000);
     return () => clearTimeout(timer);
   }, [activeSlide, heroCount, menuSlides]);
 
@@ -211,7 +215,7 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
 
   return (
     <div className="customer-editorial min-h-screen bg-[#F6EDD7] text-[#3F3B24]" style={{ fontFamily: "var(--font-sans)" }}>
-      <style>{`${FONTS}\n@keyframes heroFade { from { opacity: 0.2; } to { opacity: 1; } }`}</style>
+      <style>{`${FONTS}\n@keyframes heroCrossfade { from { opacity: 0; } to { opacity: 1; } }\n@media (prefers-reduced-motion: reduce) { .hero-slide-enter { animation: none !important; } }`}</style>
 
       {/* Hero */}
       <header className="relative overflow-hidden bg-[#F6EDD7]">
@@ -235,16 +239,29 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
             <div className="absolute -inset-3 sm:-inset-8 bg-[#D99168] rounded-[42%_58%_55%_45%/48%_42%_58%_52%] rotate-[-4deg]" />
             <div className="relative aspect-[4/3] sm:aspect-[5/4] overflow-hidden rounded-[38%_62%_52%_48%/45%_40%_60%_55%] shadow-[0_24px_60px_rgba(63,59,36,0.22)]">
               {menuSlides.length > 0 ? (
-                <img
-                  key={menuSlides[activeSlide].src}
-                  src={menuSlides[activeSlide].src}
-                  alt={menuSlides[activeSlide].name}
-                  loading="eager"
-                  fetchPriority="high"
-                  decoding="async"
-                  className="absolute inset-0 w-full h-full object-cover"
-                  style={{ animation: "heroFade 900ms ease-out" }}
-                />
+                <>
+                  {previousSlide !== null && menuSlides[previousSlide] && previousSlide !== activeSlide && (
+                    <img
+                      key={`previous-${menuSlides[previousSlide].src}`}
+                      src={menuSlides[previousSlide].src}
+                      alt=""
+                      aria-hidden="true"
+                      decoding="async"
+                      className="absolute inset-0 w-full h-full object-cover"
+                    />
+                  )}
+                  <img
+                    key={menuSlides[activeSlide].src}
+                    src={menuSlides[activeSlide].src}
+                    alt={menuSlides[activeSlide].name}
+                    loading="eager"
+                    fetchPriority="high"
+                    decoding="async"
+                    className="hero-slide-enter absolute inset-0 w-full h-full object-cover"
+                    style={{ animation: "heroCrossfade 900ms ease-in-out both" }}
+                    onAnimationEnd={() => setPreviousSlide(null)}
+                  />
+                </>
               ) : (
                 <div className="w-full h-full bg-[#E8D7B5]" />
               )}
