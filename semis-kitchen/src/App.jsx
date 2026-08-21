@@ -632,7 +632,18 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                     min={minimumDeliveryDate}
                     value={form.deliveryDate}
                     aria-invalid={checkoutErrors.deliveryDate || undefined}
-                    onChange={(e) => { setForm((f) => ({ ...f, deliveryDate: e.target.value, deliverySlot: "" })); setCheckoutErrors((current) => ({ ...current, deliveryDate: false, deliverySlot: false })); }}
+                    onChange={(e) => {
+                      const selectedDate = e.target.value;
+                      if (selectedDate && selectedDate < minimumDeliveryDate) {
+                        setForm((f) => ({ ...f, deliveryDate: "", deliverySlot: "" }));
+                        setCheckoutErrors((current) => ({ ...current, deliveryDate: true, deliverySlot: false }));
+                        setErrorMsg("Please choose an available date that has not already passed.");
+                        return;
+                      }
+                      setForm((f) => ({ ...f, deliveryDate: selectedDate, deliverySlot: "" }));
+                      setCheckoutErrors((current) => ({ ...current, deliveryDate: false, deliverySlot: false }));
+                      setErrorMsg("");
+                    }}
                     style={{ WebkitAppearance: "none", appearance: "none", boxSizing: "border-box" }}
                     className={`block w-full max-w-full bg-green-900/60 border rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 [color-scheme:dark] ${checkoutErrors.deliveryDate ? "border-red-400 ring-2 ring-red-400/40" : "border-green-800 focus:ring-amber-400"}`}
                   />
