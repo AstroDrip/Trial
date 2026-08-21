@@ -487,15 +487,10 @@ Your invoice: ${invoiceUrl}`;
 
 /* Open the declined customer's WhatsApp chat with a prepared manual notice.
    The retained Meta integration stays disabled and is not called here. */
-export function shareDeclineOnWhatsApp(orderId, customerName, customerPhone) {
+export function shareDeclineOnWhatsApp(customerPhone) {
   let digits = String(customerPhone || "").replace(/\D/g, "");
   if (digits.length === 10) digits = `91${digits}`;
-  const name = String(customerName || "Customer").trim() || "Customer";
-  const message = `Hi ${name},
-
-Unfortunately, we're unable to accept your order ${orderId} from Semi’s Kitchen at this time.
-
-We’re sorry for the inconvenience and appreciate your understanding.`;
+  const message = "Hi! We sincerely apologize, but unfortunately we had to decline your order due to an unexpected issue. We’re really sorry for the inconvenience caused. Thank you for your understanding and for choosing Semi’s Kitchen. ❤️🙏 We hope to serve you soon!";
   const recipient = digits ? `/${digits}` : "";
   window.open(`https://wa.me${recipient}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
 }

@@ -637,7 +637,7 @@ const [section, setSection] = useState("orders");
                       )}
                       {o.status === "declined" && (
                         <button
-                          onClick={() => shareDeclineOnWhatsApp(o.id, o.customer.name, o.customer.phone)}
+                          onClick={() => shareDeclineOnWhatsApp(o.customer.phone)}
                           className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                         >
                           <Share2 className="w-3.5 h-3.5" /> Notify on WhatsApp
