@@ -32,11 +32,28 @@ const DELIVERY_SLOTS = Array.from({ length: 10 }, (_, i) => {
   const endHour = startHour + 1; // 12 PM .. 9 PM
   return { id: `${startHour}-${endHour}`, label: `${formatHour12(startHour)} – ${formatHour12(endHour)}` };
 });
-/* Today's date in YYYY-MM-DD, for the date input's min attribute */
-function todayISO() {
-  const d = new Date();
-  const tz = d.getTimezoneOffset() * 60000;
-  return new Date(d - tz).toISOString().slice(0, 10);
+function indiaDateTime(now = new Date()) {
+  const values = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(now).map(({ type, value }) => [type, value])
+  );
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    minutes: Number(values.hour) * 60 + Number(values.minute),
+  };
+}
+
+function addDaysISO(isoDate, days) {
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 /* iOS Safari renders an empty <input type="date"> as a blank box with no
    placeholder text (unlike Chrome/Android/desktop, which show "dd/mm/yyyy"
@@ -145,6 +162,13 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
     .filter(Boolean);
   const cartCount = cartLines.reduce((s, l) => s + l.qty, 0);
   const cartTotal = cartLines.reduce((s, l) => s + l.qty * l.price, 0);
+  const hasMainsInCart = cartLines.some((line) => line.cat === "mains");
+  const indiaNow = indiaDateTime();
+  const minimumDeliveryDate = hasMainsInCart ? addDaysISO(indiaNow.date, 1) : indiaNow.date;
+  const availableDeliverySlots = form.deliveryDate === indiaNow.date
+    ? DELIVERY_SLOTS.filter((slot) => Number(slot.id.split("-")[0]) * 60 >= indiaNow.minutes + 180)
+    : DELIVERY_SLOTS;
+  const selectedSlotIsAvailable = availableDeliverySlots.some((slot) => slot.id === form.deliverySlot);
   const overstockedLine = cartLines.find((line) => {
     const stock = stockOf(line);
     return stock !== null && line.qty > stock;
@@ -158,6 +182,14 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
     if (overstockedLine) {
       setStockError(overstockedLine.id);
       setErrorMsg(`Insufficient stock for ${overstockedLine.name}. Only ${stockOf(overstockedLine)} available.`);
+      return;
+    }
+    if (hasMainsInCart && form.deliveryDate === indiaNow.date) {
+      setErrorMsg("Biriyani and Main items must be ordered at least one day in advance.");
+      return;
+    }
+    if (form.deliveryDate === indiaNow.date && !selectedSlotIsAvailable) {
+      setErrorMsg("Same-day orders require at least 3 hours of preparation time.");
       return;
     }
     const hasLocation = form.location?.lat != null && form.location?.lng != null;
@@ -579,9 +611,9 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                 <div className="relative overflow-hidden rounded-lg">
                   <input
                     type="date"
-                    min={todayISO()}
+                    min={minimumDeliveryDate}
                     value={form.deliveryDate}
-                    onChange={(e) => setForm((f) => ({ ...f, deliveryDate: e.target.value }))}
+                    onChange={(e) => setForm((f) => ({ ...f, deliveryDate: e.target.value, deliverySlot: "" }))}
                     style={{ WebkitAppearance: "none", appearance: "none", boxSizing: "border-box" }}
                     className="block w-full max-w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
                   />
@@ -602,12 +634,22 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                   <option value="" disabled>
                     Select a time slot
                   </option>
-                  {DELIVERY_SLOTS.map((slot) => (
+                  {availableDeliverySlots.map((slot) => (
                     <option key={slot.id} value={slot.id}>
                       {slot.label}
                     </option>
                   ))}
                 </select>
+                {hasMainsInCart && (
+                  <p className="mt-2 text-xs text-amber-300">
+                    Biriyani and Main items require advance ordering and cannot be ordered for today.
+                  </p>
+                )}
+                {!hasMainsInCart && form.deliveryDate === indiaNow.date && (
+                  <p className="mt-2 text-xs text-stone-400">
+                    Same-day time slots need at least 3 hours of preparation time.
+                  </p>
+                )}
               </div>
               <textarea
                 placeholder="Notes (spice level, allergies, etc.) — optional"
@@ -632,6 +674,8 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                 !form.phone.trim() ||
                 !form.deliveryDate ||
                 !form.deliverySlot ||
+                !selectedSlotIsAvailable ||
+                form.deliveryDate < minimumDeliveryDate ||
                 (form.mode === "Delivery" && !form.address.trim() && !(form.location?.lat != null && form.location?.lng != null))
               }
               onClick={submitOrder}
