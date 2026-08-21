@@ -485,6 +485,21 @@ Your invoice: ${invoiceUrl}`;
   window.open(`https://wa.me${recipient}?text=${encodeURIComponent(fallbackMessage)}`, "_blank", "noopener,noreferrer");
 }
 
+/* Open the declined customer's WhatsApp chat with a prepared manual notice.
+   The retained Meta integration stays disabled and is not called here. */
+export function shareDeclineOnWhatsApp(orderId, customerName, customerPhone) {
+  let digits = String(customerPhone || "").replace(/\D/g, "");
+  if (digits.length === 10) digits = `91${digits}`;
+  const name = String(customerName || "Customer").trim() || "Customer";
+  const message = `Hi ${name},
+
+Unfortunately, we're unable to accept your order ${orderId} from Semi’s Kitchen at this time.
+
+We’re sorry for the inconvenience and appreciate your understanding.`;
+  const recipient = digits ? `/${digits}` : "";
+  window.open(`https://wa.me${recipient}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+}
+
 export async function fetchInvoiceBatchInfo() {
   const res = await adminRequest("/invoices/batch-info");
   const json = await parseApiResponse(res, "Unable to load invoice batches");

@@ -73,6 +73,7 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
   const [form, setForm] = useState({ name: "", phone: "", address: "", notes: "", mode: "Delivery", location: null, paymentMethod: "cod", deliveryDate: "", deliverySlot: "" });
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [checkoutErrors, setCheckoutErrors] = useState({});
   const [stockError, setStockError] = useState(null);
   const [slide, setSlide] = useState(0);
   const [previousSlide, setPreviousSlide] = useState(null);
@@ -184,23 +185,29 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
       setErrorMsg(`Insufficient stock for ${overstockedLine.name}. Only ${stockOf(overstockedLine)} available.`);
       return;
     }
+    const hasLocation = form.location?.lat != null && form.location?.lng != null;
+    const requiredErrors = {
+      name: !form.name.trim(),
+      phone: !form.phone.trim(),
+      location: form.mode === "Delivery" && !form.address.trim() && !hasLocation,
+      deliveryDate: !form.deliveryDate || form.deliveryDate < minimumDeliveryDate,
+      deliverySlot: !form.deliverySlot || !selectedSlotIsAvailable,
+    };
+    setCheckoutErrors(requiredErrors);
+    if (Object.values(requiredErrors).some(Boolean)) {
+      setErrorMsg("Please fill in or correct the highlighted required fields.");
+      return;
+    }
     if (hasMainsInCart && form.deliveryDate === indiaNow.date) {
+      setCheckoutErrors((current) => ({ ...current, deliveryDate: true }));
       setErrorMsg("Biriyani and Main items must be ordered at least one day in advance.");
       return;
     }
     if (form.deliveryDate === indiaNow.date && !selectedSlotIsAvailable) {
+      setCheckoutErrors((current) => ({ ...current, deliverySlot: true }));
       setErrorMsg("Same-day orders require at least 3 hours of preparation time.");
       return;
     }
-    const hasLocation = form.location?.lat != null && form.location?.lng != null;
-    if (
-      !form.name.trim() ||
-      !form.phone.trim() ||
-      !form.deliveryDate ||
-      !form.deliverySlot ||
-      (form.mode === "Delivery" && !form.address.trim() && !hasLocation)
-    )
-      return;
     setSubmitting(true);
     const order = {
       items: cartLines.map((l) => ({ id: l.id, qty: l.qty })),
@@ -234,6 +241,7 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
     }
     setSubmitting(false);
     setErrorMsg("");
+    setCheckoutErrors({});
     setCart({});
     setCheckoutOpen(false);
     setCartOpen(false);
@@ -511,6 +519,8 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                       return;
                     }
                     setCartOpen(false);
+                    setCheckoutErrors({});
+                    setErrorMsg("");
                     setCheckoutOpen(true);
                   }}
                   className="w-full py-3 rounded-lg bg-amber-400 text-green-950 font-semibold hover:bg-amber-300 transition-colors"
@@ -546,7 +556,7 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
               ))}
             </div>
 {form.mode === "Delivery" && (
-              <p className="mb-4 text-sm text-amber-300/90 bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2">
+              <p className="mb-4 text-sm font-semibold text-amber-50 bg-amber-500/25 border border-amber-300 rounded-lg px-3 py-2">
                 Delivery charge is not included in the bill.
               </p>
             )}
@@ -578,16 +588,21 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
               <input
                 placeholder="Full name"
                 value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                className="w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                aria-invalid={checkoutErrors.name || undefined}
+                onChange={(e) => { setForm((f) => ({ ...f, name: e.target.value })); setCheckoutErrors((current) => ({ ...current, name: false })); }}
+                className={`w-full bg-green-900/60 border rounded-lg px-3.5 py-2.5 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 ${checkoutErrors.name ? "border-red-400 ring-2 ring-red-400/40" : "border-green-800 focus:ring-amber-400"}`}
               />
+              {checkoutErrors.name && <p className="-mt-2 text-xs text-red-300">Please enter your full name.</p>}
               <input
                 placeholder="Phone number"
                 value={form.phone}
-                onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-                className="w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                aria-invalid={checkoutErrors.phone || undefined}
+                onChange={(e) => { setForm((f) => ({ ...f, phone: e.target.value })); setCheckoutErrors((current) => ({ ...current, phone: false })); }}
+                className={`w-full bg-green-900/60 border rounded-lg px-3.5 py-2.5 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 ${checkoutErrors.phone ? "border-red-400 ring-2 ring-red-400/40" : "border-green-800 focus:ring-amber-400"}`}
               />
+              {checkoutErrors.phone && <p className="-mt-2 text-xs text-red-300">Please enter your phone number.</p>}
               {form.mode === "Delivery" && (
+                <div className={checkoutErrors.location ? "rounded-xl ring-2 ring-red-400" : ""}>
                 <Suspense
                   fallback={(
                     <div className="h-80 rounded-xl border border-green-800 bg-green-900/40 flex items-center justify-center text-sm text-stone-400">
@@ -597,14 +612,17 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                 >
                   <LocationPicker
                     value={form.location}
-                    onChange={(loc) =>
+                    onChange={(loc) => {
+                      setCheckoutErrors((current) => ({ ...current, location: false }));
                       setForm((f) => {
                         const merged = { ...(f.location || {}), ...loc };
                         return { ...f, location: merged, address: merged.address || f.address };
-                      })
-                    }
+                      });
+                    }}
                   />
                 </Suspense>
+                {checkoutErrors.location && <p className="mt-2 text-xs text-red-300">Please select a delivery location or enter an address.</p>}
+                </div>
               )}
               <div>
                 <label className="text-xs text-stone-400 mb-1.5 block">When should the order arrive?</label>
@@ -613,9 +631,10 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                     type="date"
                     min={minimumDeliveryDate}
                     value={form.deliveryDate}
-                    onChange={(e) => setForm((f) => ({ ...f, deliveryDate: e.target.value, deliverySlot: "" }))}
+                    aria-invalid={checkoutErrors.deliveryDate || undefined}
+                    onChange={(e) => { setForm((f) => ({ ...f, deliveryDate: e.target.value, deliverySlot: "" })); setCheckoutErrors((current) => ({ ...current, deliveryDate: false, deliverySlot: false })); }}
                     style={{ WebkitAppearance: "none", appearance: "none", boxSizing: "border-box" }}
-                    className="block w-full max-w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
+                    className={`block w-full max-w-full bg-green-900/60 border rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 [color-scheme:dark] ${checkoutErrors.deliveryDate ? "border-red-400 ring-2 ring-red-400/40" : "border-green-800 focus:ring-amber-400"}`}
                   />
                   {IS_IOS && !form.deliveryDate && (
                     <span className="absolute inset-y-0 left-3.5 flex items-center text-sm text-stone-500 pointer-events-none">
@@ -623,13 +642,15 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                     </span>
                   )}
                 </div>
+                {checkoutErrors.deliveryDate && <p className="mt-1 text-xs text-red-300">Please choose an available delivery date.</p>}
                 {/* A native <select> so mobile OSes render their own picker —
                     iOS shows an actual spinning wheel, Android a scrollable
                     list — instead of a custom-built one. */}
                 <select
                   value={form.deliverySlot}
-                  onChange={(e) => setForm((f) => ({ ...f, deliverySlot: e.target.value }))}
-                  className="mt-2 w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
+                  aria-invalid={checkoutErrors.deliverySlot || undefined}
+                  onChange={(e) => { setForm((f) => ({ ...f, deliverySlot: e.target.value })); setCheckoutErrors((current) => ({ ...current, deliverySlot: false })); }}
+                  className={`mt-2 w-full bg-green-900/60 border rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 [color-scheme:dark] ${checkoutErrors.deliverySlot ? "border-red-400 ring-2 ring-red-400/40" : "border-green-800 focus:ring-amber-400"}`}
                 >
                   <option value="" disabled>
                     Select a time slot
@@ -640,6 +661,7 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
                     </option>
                   ))}
                 </select>
+                {checkoutErrors.deliverySlot && <p className="mt-1 text-xs text-red-300">Please choose an available time slot.</p>}
                 {hasMainsInCart && (
                   <p className="mt-2 text-xs text-amber-300">
                     Biriyani and Main items require advance ordering and cannot be ordered for today.
@@ -669,14 +691,7 @@ function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
             <button
               disabled={
                 submitting ||
-                !liveReady ||
-                !form.name.trim() ||
-                !form.phone.trim() ||
-                !form.deliveryDate ||
-                !form.deliverySlot ||
-                !selectedSlotIsAvailable ||
-                form.deliveryDate < minimumDeliveryDate ||
-                (form.mode === "Delivery" && !form.address.trim() && !(form.location?.lat != null && form.location?.lng != null))
+                !liveReady
               }
               onClick={submitOrder}
               className="w-full mt-3 py-3 rounded-lg bg-amber-400 text-green-950 font-semibold hover:bg-amber-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
