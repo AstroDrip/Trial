@@ -5,8 +5,22 @@
 CREATE TABLE IF NOT EXISTS categories (
   id text PRIMARY KEY
 );
-INSERT INTO categories(id) VALUES ('fried'), ('frozen'), ('mains')
-ON CONFLICT (id) DO NOTHING;
+-- Older populated databases require a category name. Preserve their labels;
+-- the minimal baseline used by earlier local installs has only an id column.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute
+    WHERE attrelid = 'categories'::regclass AND attname = 'name' AND NOT attisdropped
+  ) THEN
+    INSERT INTO categories(id, name) VALUES
+      ('fried', 'Fried Snacks'), ('frozen', 'Frozen Snacks'), ('mains', 'Biriyani & Curries')
+    ON CONFLICT (id) DO NOTHING;
+  ELSE
+    INSERT INTO categories(id) VALUES ('fried'), ('frozen'), ('mains')
+    ON CONFLICT (id) DO NOTHING;
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS menu_items (
   id text PRIMARY KEY,
