@@ -159,7 +159,7 @@ const ITEM_PHOTOS = {
   "mc-chattipathiri-1-5kg": "chattipathiri.jpeg",
   "mc-chattipathiri-2kg": "chattipathiri.jpeg",
   "mc-vegetable-stew": "vegetable stew.jpeg",
-  "fz-irachi-pathiri": "fz-iracch pathiri.jpeg",
+  "fz-irachi-pathiri": "fz-irachi pathiri.jpeg",
   "combo-broasted": "broasted quboos hummus.jpeg",
   "combo-neypathal": "neypathal beef masala.jpeg",
   "combo-batura": "batura butter chicken.jpeg",
@@ -173,6 +173,8 @@ function imageForItem(item) {
    item's exact image file isn't present, fall back to the matching photo
    that is available in src/assets/images/. */
 const IMAGE_FALLBACK = {
+  // Older saved menus still contain the original misspelled photo filename.
+  "fz-iracch pathiri.jpeg": "fz-irachi pathiri.jpeg",
   /* Fried snacks (fr-*) */
   "fr-chicken-roll.png": "fr-ChickenRoll.jpeg",
   "fr-cutlet-beef.png": "fr-cutlet.jpeg",
