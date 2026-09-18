@@ -356,21 +356,6 @@ export async function createOrder(order, idempotencyKey) {
   return json.data;
 }
 
-export async function loadOffers(slug = "") {
-  const res = await fetch(`${API}/offers${slug ? `/${encodeURIComponent(slug)}` : ""}`, { cache: "no-store" });
-  return parseApiResponse(res, "Unable to load offers");
-}
-
-export async function publishOffer(body) {
-  const res = await adminRequest("/offers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  return (await parseApiResponse(res, "Unable to publish offer")).data;
-}
-
-export async function closeOffer(slug) {
-  const res = await adminRequest(`/offers/${encodeURIComponent(slug)}/close`, { method: "PUT" });
-  return parseApiResponse(res, "Unable to close offer");
-}
-
 export async function updatePaymentStatusApi(id, paymentStatus) {
   const res = await adminRequest(`/orders/${id}/payment`, {
     method: "PUT",
@@ -510,20 +495,18 @@ export function shareInvoiceOnWhatsApp(orderId, customerPhone, invoiceShareToken
   const invoiceUrl = `https://semiskitchen.in/invoice/${encodeURIComponent(orderId)}?token=${encodeURIComponent(invoiceShareToken)}`;
   const qrUrl = "https://semiskitchen.in/upi-qr.jpeg";
   const message = `Thank you for choosing Semi’s Kitchen! ❤️
-
 We truly appreciate your order and the trust you’ve placed in us. Every dish is prepared with care, love, and attention to detail.
-
 We hope you enjoy every bite!
 Thank you for supporting Semi’s Kitchen. 🍽️✨
-
+UPI payment QR: ${qrUrl}
 Your invoice: ${invoiceUrl}`;
 
   // Open the intended customer's WhatsApp chat directly. Web share sheets
   // cannot target a particular recipient, so the QR remains a public link in
   // the prepared message instead of being attached through navigator.share.
-  const fallbackMessage = `${message}\n\nUPI payment QR: ${qrUrl}`;
+  // QR is the first URL; WhatsApp decides whether to display a link preview.
   const recipient = digits ? `/${digits}` : "";
-  window.open(`https://wa.me${recipient}?text=${encodeURIComponent(fallbackMessage)}`, "_blank", "noopener,noreferrer");
+  window.open(`https://wa.me${recipient}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
 }
 
 /* Open the declined customer's WhatsApp chat with a prepared manual notice.
