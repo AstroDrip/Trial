@@ -46,6 +46,7 @@ import {
   adminLogout,
 } from "./lib/kitchen.jsx";
 import { formatIndiaDate, indiaCalendarDateKey } from "./lib/dateTime.js";
+import PaymentQrSettings from "./components/PaymentQrSettings.jsx";
 
 /* ---------------------------------------------------------
    Admin dashboard (secret route /nashi)
@@ -1203,6 +1204,7 @@ const periods = Array.from(byPeriod.entries()).sort((a, b) => b[0] - a[0]);
                       })}
                     </div>
                   </div>
+              <PaymentQrSettings />
             </div>
           );
         })()}
