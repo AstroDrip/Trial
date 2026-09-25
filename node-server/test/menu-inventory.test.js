@@ -47,6 +47,7 @@ before(async () => {
   await database.exec(`BEGIN; ${migration} COMMIT;`);
   await database.exec(fs.readFileSync(path.join(__dirname, "../security_hardening.sql"), "utf8"));
   await database.exec(fs.readFileSync(path.join(__dirname, "../items_management.sql"), "utf8"));
+  await database.exec(fs.readFileSync(path.join(__dirname, "../item_ordering.sql"), "utf8"));
 });
 after(() => database.close());
 
