@@ -89,7 +89,7 @@ test("Sunday mains-only delivery is blocked but either snack type permits a mixe
 
 function customer() {
   const date = new Date(); date.setUTCDate(date.getUTCDate() + 2);
-  return { name: "Test customer", phone: "919876543210", address: "Test address", deliveryDate: date.toISOString().slice(0, 10), deliverySlot: "12-13" };
+  return { name: "Test customer", phone: "9876543210", address: "Test address", deliveryDate: date.toISOString().slice(0, 10), deliverySlot: "12-13" };
 }
 
 test("orders above stock and at zero stock succeed without deducting inventory or restoring it on decline", async () => {
