@@ -23,7 +23,7 @@ const SINGLE_ORDER_QUERY = `
     c.phone,
 
     oi.id AS order_item_id,
-    mi.name AS item_name,
+    oi.item_name_snapshot AS item_name,
     oi.quantity,
     oi.unit_price,
     oi.subtotal,
@@ -35,13 +35,21 @@ const SINGLE_ORDER_QUERY = `
   JOIN customers c ON o.customer_id = c.id
   JOIN order_items oi ON o.id = oi.order_id
   JOIN menu_items mi ON mi.id = oi.menu_item_id
-  WHERE o.id = $1;
+  WHERE o.id = $1
+    AND ($2::text IS NULL OR o.invoice_share_token = $2);
 `;
 
 // Batch version — every accepted order's line items in one result set.
 // groupOrders() in invoiceGenerator.js splits this back into one object
 // per order (use this for a "generate all accepted invoices" job).
 const ACCEPTED_ORDERS_QUERY = `
+  WITH selected_orders AS (
+    SELECT id
+    FROM orders
+    WHERE status = 'accepted'
+    ORDER BY created_at, id
+    LIMIT $1 OFFSET $2
+  )
   SELECT
     o.invoice_id,
     o.id AS order_id,
@@ -51,7 +59,7 @@ const ACCEPTED_ORDERS_QUERY = `
     c.phone,
 
     oi.id AS order_item_id,
-    mi.name AS item_name,
+    oi.item_name_snapshot AS item_name,
     oi.quantity,
     oi.unit_price,
     oi.subtotal,
@@ -60,21 +68,25 @@ const ACCEPTED_ORDERS_QUERY = `
     o.paymet AS payment_method
 
   FROM orders o
+  JOIN selected_orders selected ON selected.id = o.id
   JOIN customers c ON o.customer_id = c.id
   JOIN order_items oi ON o.id = oi.order_id
   JOIN menu_items mi ON mi.id = oi.menu_item_id
-  WHERE o.status = 'accepted'
   ORDER BY o.id;
 `;
 
-// Used only by the Google Sheet sync — targets 'completed' orders instead of
-// 'accepted' so a row is only pushed to the sheet once the order is fully
-// done (previously this reused ACCEPTED_ORDERS_QUERY, which meant orders
-// still in progress could get synced). Also only picks up orders that
-// haven't been synced yet (synced_at IS NULL) — previously this had no such
-// filter, so clicking "Sync to Sheets" more than once re-appended every
-// completed order's rows again each time, silently duplicating them in the
-// sheet. The controller sets synced_at after a successful push.
+const ACCEPTED_ORDERS_COUNT_QUERY = `
+  SELECT count(*)::integer AS total
+  FROM orders
+  WHERE status = 'accepted';
+`;
+
+// Used only by the Google Sheet sync. Selects orders that are completed AND
+// paid and not yet synced (synced_at IS NULL). Unpaid completed orders wait
+// until they are marked paid, so every synced row is a settled sale and the
+// "delete paid + synced" clean-up never removes an order missing from the
+// sheet. The sheet receives one row per order (not per line item); the
+// controller sets synced_at after a successful push.
 const COMPLETED_ORDERS_QUERY = `
   SELECT
     o.invoice_id,
@@ -85,7 +97,7 @@ const COMPLETED_ORDERS_QUERY = `
     c.phone,
 
     oi.id AS order_item_id,
-    mi.name AS item_name,
+    oi.item_name_snapshot AS item_name,
     oi.quantity,
     oi.unit_price,
     oi.subtotal,
@@ -97,8 +109,8 @@ const COMPLETED_ORDERS_QUERY = `
   JOIN customers c ON o.customer_id = c.id
   JOIN order_items oi ON o.id = oi.order_id
   JOIN menu_items mi ON mi.id = oi.menu_item_id
-  WHERE o.status = 'completed' AND o.synced_at IS NULL
+  WHERE o.status = 'completed' AND o.payment_status = 'paid' AND o.synced_at IS NULL
   ORDER BY o.id;
 `;
 
-module.exports = { SINGLE_ORDER_QUERY, ACCEPTED_ORDERS_QUERY, COMPLETED_ORDERS_QUERY };
+module.exports = { SINGLE_ORDER_QUERY, ACCEPTED_ORDERS_QUERY, ACCEPTED_ORDERS_COUNT_QUERY, COMPLETED_ORDERS_QUERY };

@@ -8,19 +8,82 @@ import {
   Soup,
 } from "lucide-react";
 
-// API base URL — set VITE_API_URL in production (Vercel env var) to point at
-// your deployed backend (e.g. https://your-api.vercel.app/api). In local dev
-// it defaults to a relative "/api" path, which the Vite dev server proxies to
-// the backend (see vite.config.js). Using a relative path avoids LAN-IP
-// reachability and CORS issues so the site works from any host.
+// API base URL. Render uses the relative "/api" path and forwards it to the
+// backend through render.yaml. Local development uses the Vite proxy in
+// vite.config.js. VITE_API_URL remains available for an intentional alternate
+// deployment, without tying the application to a specific hosting provider.
 export const API = import.meta.env.VITE_API_URL || "/api";
+
+async function adminRequest(path, options = {}) {
+  let res;
+  try {
+    res = await fetch(`${API}${path}`, { ...options, credentials: "include" });
+  } catch (cause) {
+    const error = new Error("The server is temporarily unreachable");
+    error.cause = cause;
+    window.dispatchEvent(new CustomEvent("semis-api-error", { detail: { message: error.message } }));
+    throw error;
+  }
+  if (res.status === 401) window.dispatchEvent(new Event("semis-admin-unauthorized"));
+  return res;
+}
+
+async function parseApiResponse(res, fallbackMessage = "Request failed") {
+  const text = await res.text();
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      if (res.ok) {
+        const error = new Error("The server returned an invalid response");
+        window.dispatchEvent(new CustomEvent("semis-api-error", { detail: { message: error.message } }));
+        throw error;
+      }
+    }
+  }
+  if (!res.ok) {
+    const error = new Error(data.message || data.error || fallbackMessage);
+    error.code = data.code;
+    error.status = res.status;
+    if (res.status !== 401) {
+      window.dispatchEvent(new CustomEvent("semis-api-error", { detail: { message: error.message, status: error.status } }));
+    }
+    throw error;
+  }
+  return data;
+}
+
+export async function adminLogin(password) {
+  const res = await adminRequest("/admin/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+  return parseApiResponse(res, "Unable to sign in");
+}
+
+export async function checkAdminSession() {
+  const res = await adminRequest("/admin/session");
+  if (res.status === 401) return false;
+  await parseApiResponse(res, "Unable to check staff session");
+  return true;
+}
+
+export async function adminLogout() {
+  const res = await adminRequest("/admin/logout", { method: "POST" });
+  if (res.status !== 401) await parseApiResponse(res, "Unable to sign out");
+}
 
 
 /* ---------------------------------------------------------
    Brand
 --------------------------------------------------------- */
 export const FONTS = `
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Work+Sans:wght@400;500;600;700&display=swap');
+:root {
+  --font-serif: Georgia, "Times New Roman", ui-serif, serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
 `;
 
 export const CATS = [
@@ -38,38 +101,44 @@ function formatItemName(name) {
   if (!m) return name.trim();
   const base = m[1].trim();
   const variant = m[2].trim();
-  let prefix = variant;
+  let prefix;
   if (/^w\/\s*masala$/i.test(variant)) prefix = "Masala";
   else if (/^w\/o\s*masala$/i.test(variant)) prefix = "Plain";
   else prefix = variant.replace(/\bw\/\b/g, "with");
   return `${prefix} ${base}`.trim();
 }
 
-export async function loadMenu() {
-  const res = await fetch(`${API}/menu`);
-  const json = await res.json();
-
-  const menu = json.data.map((item) => ({
+function mapMenuItems(data) {
+  return data.map((item) => ({
     id: item.id,
     cat: item.cat,
+    isCombo: item.isCombo === true,
+    stockGroupId: item.stockGroupId || item.id,
     name: formatItemName(item.name),
     unit: item.unit,
     minQty: Number(item.minQty),
     step: Number(item.step),
     price: Number(item.price),
     stock: Number(item.stock),
+    available: item.available !== false,
     seasonal: item.seasonal,
-    img: item.img,
+    isDraft: item.isDraft === true,
+    img: imageForItem(item),
   }));
+}
 
-  // Hybrid: the live (authoritative) catalog is cached locally so the menu can
-  // paint instantly on later visits even before the backend responds. New live
-  // data always overwrites the cache, so real item ids + current
-  // price/stock/availability stay in sync. Fire-and-forget on purpose — don't
-  // delay the menu returning just to persist the cache.
-  writeMenuCache(menu);
+export async function loadMenu() {
+  const res = await fetch(`${API}/menu`, { cache: 'no-store' });
+  const json = await parseApiResponse(res, "Unable to load the menu");
+  const menu = mapMenuItems(json.data).filter(item => item.available && !item.isDraft);
 
   return menu;
+}
+
+export async function loadAdminMenu() {
+  const res = await adminRequest("/menu/admin", { cache: "no-store" });
+  const json = await parseApiResponse(res, "Unable to load the admin menu");
+  return mapMenuItems(json.data);
 }
 
 /* Map image filenames (from src/assets/images/) to their built URLs.
@@ -80,10 +149,34 @@ const MENU_IMAGES = import.meta.glob("/src/assets/images/*", {
   import: "default",
 });
 
+// Frontend defaults for dishes added before their photos were supplied.
+// Keep existing database photo references; no catalog/price migration is needed.
+const ITEM_PHOTOS = {
+  "mc-broasted-chicken": "broasted.jpeg",
+  "mc-ghee-rice": "ghee rice.jpeg",
+  "mc-butter-garlic-chicken": "butter garlic chicken.jpeg",
+  "mc-patthiri": "patthiri.jpeg",
+  "mc-chapatis": "chappati.jpeg",
+  "mc-chattipathiri-1kg": "chattipathiri.jpeg",
+  "mc-chattipathiri-1-5kg": "chattipathiri.jpeg",
+  "mc-chattipathiri-2kg": "chattipathiri.jpeg",
+  "mc-vegetable-stew": "vegetable stew.jpeg",
+  "fz-irachi-pathiri": "fz-irachi pathiri.jpeg",
+  "combo-broasted": "broasted quboos hummus.jpeg",
+  "combo-neypathal": "neypathal beef masala.jpeg",
+  "combo-batura": "batura butter chicken.jpeg",
+};
+
+export function imageForItem(item) {
+  return item.img || ITEM_PHOTOS[item.id] || "";
+}
+
 /* Fallback mapping: fried & frozen snacks share the same photo. When a menu
    item's exact image file isn't present, fall back to the matching photo
    that is available in src/assets/images/. */
 const IMAGE_FALLBACK = {
+  // Older saved menus still contain the original misspelled photo filename.
+  "fz-iracch pathiri.jpeg": "fz-irachi pathiri.jpeg",
   /* Fried snacks (fr-*) */
   "fr-chicken-roll.png": "fr-ChickenRoll.jpeg",
   "fr-cutlet-beef.png": "fr-cutlet.jpeg",
@@ -153,6 +246,10 @@ const imgCache = new Map();
 export function resolveImg(img) {
   if (!img) return undefined;
   if (imgCache.has(img)) return imgCache.get(img);
+  if (/^\/api\/items\/[A-Za-z0-9_-]+\/photo\?v=[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(img)) {
+    imgCache.set(img, img);
+    return img;
+  }
   const clean = img.replace(/^images\//, "");
   const direct = MENU_IMAGES[`/src/assets/images/${clean}`];
   if (direct) {
@@ -169,19 +266,6 @@ export function resolveImg(img) {
   return undefined;
 }
 
-/* Hero images: auto-detect any hero* / Hero-1* image dropped into src/assets/images/.
-   Matches lowercase "hero..." and uppercase "Hero-1 ..." so the slideshow picks
-   up every uploaded file regardless of naming/case. */
-const HERO_IMAGES = import.meta.glob("/src/assets/images/[Hh]ero*", {
-  eager: true,
-  query: "?url",
-  import: "default",
-});
-export function getFolderHeroImages() {
-  return Object.values(HERO_IMAGES);
-}
-
-export const ADMIN_CODE = "semi2026";
 export const STATUS = {
   pending: { label: "Pending", color: "text-amber-400", bg: "bg-amber-400/10", ring: "ring-amber-400/30" },
   accepted: { label: "Accepted", color: "text-emerald-400", bg: "bg-emerald-400/10", ring: "ring-emerald-400/30" },
@@ -192,124 +276,110 @@ export const STATUS = {
 export function rupee(n) {
   return `₹${n.toLocaleString("en-IN")}`;
 }
-export function genId() {
-  return "SK" + Math.random().toString(36).slice(2, 6).toUpperCase() + Date.now().toString().slice(-4);
-}
-export function genInvoiceId() {
-  const d = new Date();
-  const ymd =
-    d.getFullYear() +
-    String(d.getMonth() + 1).padStart(2, "0") +
-    String(d.getDate()).padStart(2, "0");
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return "INV-" + ymd + "-" + rand;
-}
-/* ---------------------------------------------------------
-   Storage helpers (shared, so admin + customers see the same data)
-   Uses window.storage when available, otherwise falls back to
-   localStorage so orders persist reliably in any browser.
---------------------------------------------------------- */
-function readLocal(key) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-async function readStorage(key) {
-  try {
-    const r = await window.storage.get(key, true);
-    return r ? JSON.parse(r.value) : null;
-  } catch {
-    return null;
-  }
-}
-
-/* ---------------------------------------------------------
-   Menu catalog cache — the "static catalog" half of the hybrid.
-   After every successful live load, the authoritative menu (real
-   ids + current price/stock/availability) is saved here so the
-   customer page can render it instantly on later visits, then the
-   fresh /api inventory + /api/menu overlay refreshes it. Item ids
-   are the backend's real ids, so orders and admin inventory edits
-   keep working unchanged. localStorage write is synchronous (so we
-   can seed React state on first paint); window.storage (if present)
-   is mirrored so browsers that prefer it stay in sync.
---------------------------------------------------------- */
-const MENU_CACHE_KEY = "semis_menu_cache";
-
-function readMenuCacheSync() {
-  const v = readLocal(MENU_CACHE_KEY);
-  return Array.isArray(v) ? v : [];
-}
-
-async function writeMenuCache(menu) {
-  if (!Array.isArray(menu) || menu.length === 0) return;
-  try {
-    localStorage.setItem(MENU_CACHE_KEY, JSON.stringify(menu));
-    if (window.storage?.set) {
-      await window.storage.set(MENU_CACHE_KEY, JSON.stringify(menu));
-    }
-  } catch {
-    /* Never let a cache write break the live fetch. */
-  }
-}
-
-/* Last-known catalog, read synchronously for an instant first paint.
-   The live inventory overlay (price/stock/availability) is applied on
-   top by the caller via the regular loadMenu / loadInventory refresh. */
-export function loadMenuStored() {
-  return readMenuCacheSync();
+function mapInventory(data) {
+  const inv = {};
+  data.forEach((item) => {
+    inv[item.menu_item_id] = {
+      stock: item.stock == null ? null : Math.floor(Number(item.stock)),
+      stockGroupId: item.stock_group_id || item.menu_item_id,
+      available: item.available,
+      price: Number(item.selling_price),
+      isDraft: item.isDraft === true || item.is_draft === true,
+    };
+  });
+  return inv;
 }
 
 export async function loadInventory() {
   const res = await fetch(`${API}/inventory`);
-  const json = await res.json();
+  const json = await parseApiResponse(res, "Unable to load stock information");
+  return mapInventory(json.data);
+}
 
-  const inv = {};
+export async function loadAdminInventory() {
+  const res = await adminRequest("/inventory/admin", { cache: "no-store" });
+  const json = await parseApiResponse(res, "Unable to load admin stock information");
+  return mapInventory(json.data);
+}
 
-  json.data.forEach((item) => {
-    inv[item.menu_item_id] = {
-      stock: item.stock,
-      available: item.available,
-      price: Number(item.selling_price),
-    };
+export async function loadItems() {
+  const res = await adminRequest("/items", { cache: "no-store" });
+  return (await parseApiResponse(res, "Unable to load items")).data;
+}
+
+export async function reorderItems(section, items) {
+  const res = await adminRequest('/items/reorder', {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({section,items:items.map(({id,revision})=>({id,revision}))}),
   });
+  return (await parseApiResponse(res,'Unable to save menu order')).data;
+}
 
-  return inv;
+export async function createItem(fields) {
+  const res = await adminRequest("/items", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  return (await parseApiResponse(res, "Unable to create item")).data;
+}
+
+export async function updateItem(id, fields, revision) {
+  const res = await adminRequest(`/items/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "If-Match": `"${revision}"` },
+    body: JSON.stringify(fields),
+  });
+  return (await parseApiResponse(res, "Unable to update item")).data;
+}
+
+export async function retireItem(id, revision) {
+  const res = await adminRequest(`/items/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { "If-Match": `"${revision}"` },
+  });
+  return parseApiResponse(res, "Unable to retire item");
+}
+
+export async function uploadItemPhoto(id, file, revision) {
+  const res = await adminRequest(`/items/${encodeURIComponent(id)}/photo`, {
+    method: "PUT",
+    headers: { "Content-Type": file.type, "If-Match": `"${revision}"` },
+    body: file,
+  });
+  return (await parseApiResponse(res, "Unable to save item photo")).data;
 }
 
 /* Field-level inventory update — sends only the changed field(s) so concurrent
    admins editing different fields (price vs stock vs availability) don't
    overwrite each other's changes. */
 export async function updateInventoryField(id, patch) {
-  const res = await fetch(`${API}/inventory/${id}`, {
+  const res = await adminRequest(`/inventory/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  const json = await res.json();
+  const json = await parseApiResponse(res, "Unable to update inventory");
   return json.data;
 }
 
-export async function createOrder(order) {
+export async function createOrder(order, idempotencyKey) {
   const res = await fetch(`${API}/orders`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...order, paymentStatus: order.paymentStatus || "unpaid" }),
+    headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(order),
   });
-  const json = await res.json();
+  const json = await parseApiResponse(res, "Failed to place order");
   return json.data;
 }
 
 export async function updatePaymentStatusApi(id, paymentStatus) {
-  const res = await fetch(`${API}/orders/${id}/payment`, {
+  const res = await adminRequest(`/orders/${id}/payment`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ paymentStatus }),
   });
-  const json = await res.json();
+  const json = await parseApiResponse(res, "Unable to update payment status");
   return json.data;
 }
 
@@ -342,15 +412,39 @@ export function deliveryDateLabel(dateStr) {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/* Small label so staff can tell fried and frozen variants of a snack apart. */
+export function SnackTypeBadge({ category }) {
+  if (category === "fried") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-orange-300 bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-700">
+        <Flame className="h-3 w-3" aria-hidden="true" /> Fried
+      </span>
+    );
+  }
+  if (category === "frozen") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+        <Snowflake className="h-3 w-3" aria-hidden="true" /> Frozen
+      </span>
+    );
+  }
+  return null;
+}
+
 /* Shared mapper: raw API order row -> frontend order object. */
 function mapOrder(o) {
   return {
     id: o.id,
     invoiceId: o.invoice_id,
+    invoiceShareToken: o.invoice_share_token,
     status: o.status,
     paymentStatus: o.payment_status || "unpaid",
     paymentMethod: o.payment_method || "cod",
     syncedAt: o.synced_at,
+    stockShortages: (o.stock_shortages || []).map(s => ({
+      stockGroupId: s.stock_group_id, name: formatItemName(s.name),
+      required: Number(s.required), available: Number(s.available), shortage: Number(s.shortage),
+    })),
     total: Number(o.total),
     createdAt: new Date(o.created_at).getTime(),
     customer: {
@@ -363,73 +457,82 @@ function mapOrder(o) {
       deliveryDate: o.delivery_date,
       deliverySlot: o.delivery_slot,
     },
-    items: o.items.map((i) => ({ id: i.id, name: formatItemName(i.name), qty: Number(i.qty), price: Number(i.price) })),
+    items: o.items.map((i) => ({ id: i.id, name: formatItemName(i.name), qty: Number(i.qty), price: Number(i.price), category: i.category || null })),
   };
 }
 
 export async function fetchOrders() {
-  const res = await fetch(`${API}/orders`);
-  const json = await res.json();
+  const res = await adminRequest("/orders");
+  const json = await parseApiResponse(res, "Unable to load orders");
   return json.data.map(mapOrder);
 }
 
 
 export async function deleteOrderApi(id) {
-  await fetch(`${API}/orders/${id}`, { method: "DELETE" });
+  const res = await adminRequest(`/orders/${id}`, { method: "DELETE" });
+  await parseApiResponse(res, "Unable to delete order");
 }
+
+/* Permanently removes a single order from the Completed tab.
+   The backend enforces status = 'completed' AND stock_reserved = false.
+   Invoice data, payment records, and the sales summary are not affected. */
+export async function deleteCompletedOrderApi(id) {
+  const res = await adminRequest(`/orders/${encodeURIComponent(id)}/completed`, { method: "DELETE" });
+  await parseApiResponse(res, "Unable to delete completed order");
+}
+
 
 /* Deletes orders that are completed, paid, and already confirmed synced to
    the Google Sheet — see the Admin Invoices tab's "Delete paid & synced"
    button. Returns how many rows were actually deleted. */
 export async function deletePaidSyncedOrdersApi() {
-  const res = await fetch(`${API}/orders/paid-synced`, { method: "DELETE" });
-  const json = await res.json();
+  const res = await adminRequest("/orders/paid-synced", { method: "DELETE" });
+  const json = await parseApiResponse(res, "Unable to delete synchronized orders");
   return json.deletedCount ?? 0;
 }
 
 /* Fetch archived (backed-up) orders from the shared database. This replaces
    the old per-browser localStorage archive so every admin sees identical data. */
 export async function fetchArchivedOrders() {
-  const res = await fetch(`${API}/orders/archived`);
-  const json = await res.json();
+  const res = await adminRequest("/orders/archived");
+  const json = await parseApiResponse(res, "Unable to load archived orders");
   return json.data.map(mapOrder);
 }
 
 /* Mark a set of orders as archived in the shared database. */
 export async function archiveOrdersApi(ids) {
-  const res = await fetch(`${API}/orders/archive`, {
+  const res = await adminRequest("/orders/archive", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids }),
   });
-  const json = await res.json();
-  return json.data;
-}
-
-/* Atomic, concurrency-safe stock decrement (no read-modify-write race). */
-export async function decrementStockApi(id, qty) {
-  const res = await fetch(`${API}/inventory/${id}/decrement`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ qty }),
-  });
-  const json = await res.json();
+  const json = await parseApiResponse(res, "Unable to archive orders");
   return json.data;
 }
 
 export async function updateOrderStatusApi(id, status) {
-  const res = await fetch(`${API}/orders/${id}/status`, {
+  const res = await adminRequest(`/orders/${id}/status`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),
   });
-  const json = await res.json();
+  const json = await parseApiResponse(res, "Unable to update order status");
+  return json.data;
+}
+
+export async function acceptEditedOrderApi(id, items) {
+  const res = await adminRequest(`/orders/${id}/accept-edited`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  const json = await parseApiResponse(res, "Unable to accept edited order");
   return json.data;
 }
 
 export async function fetchSalesSummary() {
-  const res = await fetch(`${API}/sales/summary`);
-  const json = await res.json();
+  const res = await adminRequest("/sales/summary");
+  const json = await parseApiResponse(res, "Unable to load sales summary");
   return json.data; // [{ date, orders_count, revenue }]
 }
 
@@ -443,68 +546,66 @@ export function downloadInvoice(orderId) {
 
 /* Open a customer WhatsApp chat with the branded public invoice link and the
    manual thank-you message. This does not call the Meta/WhatsApp API. */
-export async function shareInvoiceOnWhatsApp(orderId, customerPhone) {
+export const PAYMENT_QR_PATH = '/api/payment-qr/image?v=2026-09-23';
+
+export function shareInvoiceOnWhatsApp(orderId, customerPhone, invoiceShareToken) {
   let digits = String(customerPhone || "").replace(/\D/g, "");
   if (digits.length === 10) digits = `91${digits}`;
 
-  const invoiceUrl = `https://semiskitchen.in/invoice/${encodeURIComponent(orderId)}`;
-  const qrUrl = "https://semiskitchen.in/upi-qr.jpeg";
+  if (!invoiceShareToken) throw new Error("This invoice does not have a sharing token");
+  const invoiceUrl = `https://semiskitchen.in/invoice/${encodeURIComponent(orderId)}?token=${encodeURIComponent(invoiceShareToken)}`;
   const message = `Thank you for choosing Semi’s Kitchen! ❤️
-
 We truly appreciate your order and the trust you’ve placed in us. Every dish is prepared with care, love, and attention to detail.
-
 We hope you enjoy every bite!
 Thank you for supporting Semi’s Kitchen. 🍽️✨
-
+UPI payment QR: https://semiskitchen.in${PAYMENT_QR_PATH}
 Your invoice: ${invoiceUrl}`;
 
-  // On supported mobile browsers, use the native share sheet with the QR as
-  // an actual image attachment. The admin can then choose WhatsApp and the
-  // customer receives both the message and the QR image together.
-  try {
-    const response = await fetch(qrUrl);
-    if (!response.ok) throw new Error("QR image unavailable");
-    const qrBlob = await response.blob();
-    const qrFile = new File([qrBlob], "semis-kitchen-upi-qr.jpeg", { type: "image/jpeg" });
-    const shareData = { title: "Semi's Kitchen invoice", text: message, files: [qrFile] };
-    if (navigator.share && navigator.canShare?.(shareData)) {
-      await navigator.share(shareData);
-      return;
-    }
-  } catch (err) {
-    if (err?.name === "AbortError") return;
-  }
-
-  // Desktop/older-browser fallback: open the customer's WhatsApp chat with
-  // both public links. The QR link can be opened or forwarded manually.
-  const fallbackMessage = `${message}\n\nUPI payment QR: ${qrUrl}`;
+  // Open the intended customer's WhatsApp chat directly. Web share sheets
+  // cannot target a particular recipient. The QR link uses the same fixed
+  // image endpoint as the read-only Sales preview.
   const recipient = digits ? `/${digits}` : "";
-  window.open(`https://wa.me${recipient}?text=${encodeURIComponent(fallbackMessage)}`, "_blank", "noopener,noreferrer");
+  window.open(`https://wa.me${recipient}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
 }
 
-/* Download a ZIP of one PDF per accepted order. */
-export function downloadAllInvoices() {
+/* Open the declined customer's WhatsApp chat with a prepared manual notice.
+   The retained Meta integration stays disabled and is not called here. */
+export function shareDeclineOnWhatsApp(customerPhone) {
+  let digits = String(customerPhone || "").replace(/\D/g, "");
+  if (digits.length === 10) digits = `91${digits}`;
+  const message = "Hi! We sincerely apologize, but unfortunately we had to decline your order due to an unexpected issue. We’re really sorry for the inconvenience caused. Thank you for your understanding and for choosing Semi’s Kitchen. ❤️🙏 We hope to serve you soon!";
+  const recipient = digits ? `/${digits}` : "";
+  window.open(`https://wa.me${recipient}?text=${encodeURIComponent(message)}`, "_blank", "noopener,noreferrer");
+}
+
+export async function fetchInvoiceBatchInfo() {
+  const res = await adminRequest("/invoices/batch-info");
+  const json = await parseApiResponse(res, "Unable to load invoice batches");
+  return json.data;
+}
+
+/* Downloads one storage-free ZIP containing at most three invoice PDFs. */
+export async function downloadInvoiceBatch(page) {
+  const res = await adminRequest(`/invoices/batch?page=${encodeURIComponent(page)}`);
+  if (!res.ok) {
+    await parseApiResponse(res, "Unable to download invoice batch");
+  }
+  const blobUrl = URL.createObjectURL(await res.blob());
   const a = document.createElement("a");
-  a.href = `${API}/invoices/batch`;
-  a.download = `invoices-${Date.now()}.zip`;
+  a.href = blobUrl;
+  a.download = `accepted-invoices-batch-${page}.zip`;
   document.body.appendChild(a);
   a.click();
   a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 }
 
 /* Push all accepted orders' line items into the configured Google Sheet.
    Returns { success, appended } or throws on failure. */
 export async function syncToSheets() {
-  const res = await fetch(`${API}/invoices/sync-sheet`, { method: "POST" });
-  const json = await res.json();
-  if (!res.ok) throw new Error(json.error || "Sync to Google Sheets failed");
+  const res = await adminRequest("/invoices/sync-sheet", { method: "POST" });
+  const json = await parseApiResponse(res, "Sync to Google Sheets failed");
   return json; // { success, appended }
-}
-
-export async function loadHeroImages() {
-  const v = await readStorage("heroImages");
-  if (v) return v;
-  return readLocal("heroImages") ?? [];
 }
 
 /* ---------------------------------------------------------
@@ -516,7 +617,7 @@ export function Logo({ size = "md" }) {
     <div className="leading-none">
       <div
         className={`${big ? "text-4xl" : "text-3xl"} text-amber-300 tracking-tight uppercase`}
-        style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}
+        style={{ fontFamily: "var(--font-serif)", fontWeight: 600 }}
       >
         Semi's Kitchen
       </div>

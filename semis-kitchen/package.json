@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:checkout": "node --test test/checkout-date.test.mjs",
+    "test:cart": "node --test test/floating-cart.test.mjs",
+    "test:time": "node --test test/india-time.test.mjs",
+    "test:seo": "npm run build && node test/seo-contract.test.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

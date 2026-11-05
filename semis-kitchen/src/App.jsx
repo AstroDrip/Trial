@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { lazy, Suspense, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   ShoppingBag,
   Plus,
@@ -11,15 +11,25 @@ import {
   FONTS,
   CATS,
   rupee,
-  genId,
-  genInvoiceId,
   resolveImg,
   loadMenu,
-  loadMenuStored,
-  loadInventory,
   createOrder,
 } from "./lib/kitchen.jsx";
-import LocationPicker from "./components/LocationPicker.jsx";
+import { applyDeliveryDateInput, deliveryDateIsUnavailable, mainsSundayBlocked } from "./lib/deliveryDate.js";
+import { floatingCartPlacement } from "./lib/floatingCart.js";
+import { checkoutAttempt } from "./lib/checkoutAttempt.js";
+
+const LocationPicker = lazy(() => import("./components/LocationPicker.jsx"));
+
+function InstagramIcon({ className = "" }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <rect width="18" height="18" x="3" y="3" rx="5" />
+      <circle cx="12" cy="12" r="4" />
+      <circle cx="17.5" cy="6.5" r="0.75" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
 
 /* ---------------------------------------------------------
    Delivery time slots: hourly ranges from 11 AM to 9 PM.
@@ -34,32 +44,90 @@ const DELIVERY_SLOTS = Array.from({ length: 10 }, (_, i) => {
   const endHour = startHour + 1; // 12 PM .. 9 PM
   return { id: `${startHour}-${endHour}`, label: `${formatHour12(startHour)} – ${formatHour12(endHour)}` };
 });
-/* Today's date in YYYY-MM-DD, for the date input's min attribute */
-function todayISO() {
-  const d = new Date();
-  const tz = d.getTimezoneOffset() * 60000;
-  return new Date(d - tz).toISOString().slice(0, 10);
+function indiaDateTime(now = new Date()) {
+  const values = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(now).map(({ type, value }) => [type, value])
+  );
+  return {
+    date: `${values.year}-${values.month}-${values.day}`,
+    minutes: Number(values.hour) * 60 + Number(values.minute),
+  };
 }
+
 /* iOS Safari renders an empty <input type="date"> as a blank box with no
    placeholder text (unlike Chrome/Android/desktop, which show "dd/mm/yyyy"
    on their own). Only iOS needs a manual placeholder overlay — showing one
    everywhere else double-renders on top of the browser's real placeholder. */
 const IS_IOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
 
+const CHATTIPATHIRI_WEIGHTS = [
+  { id: "mc-chattipathiri-1kg", label: "1 kg" },
+  { id: "mc-chattipathiri-1-5kg", label: "1.5 kg" },
+  { id: "mc-chattipathiri-2kg", label: "2 kg" },
+];
+
+function chattipathiriDisplayName(name, weightLabel) {
+  if (!name || !weightLabel) return name;
+  const escaped = weightLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const withoutTrailingWeight = name.replace(new RegExp(`(?:\\s*[-–—]\\s*|\\s+)${escaped}\\s*$`, "i"), "").trim();
+  return withoutTrailingWeight || name;
+}
+
+
 /* ---------------------------------------------------------
    Customer: Menu + Cart + Checkout
 --------------------------------------------------------- */
-function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
+export function CustomerApp({ menu, inventory, menuState, liveReady, onRetryMenu }) {
   const [tab, setTab] = useState("fried");
+  const [mainsTab, setMainsTab] = useState("all");
+  const [chattipathiriId, setChattipathiriId] = useState(CHATTIPATHIRI_WEIGHTS[0].id);
   const [cart, setCart] = useState({});
   const [cartOpen, setCartOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState(null);
   const [form, setForm] = useState({ name: "", phone: "", address: "", notes: "", mode: "Delivery", location: null, paymentMethod: "cod", deliveryDate: "", deliverySlot: "" });
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const [pendingAttempt, setPendingAttempt] = useState(null);
   const [errorMsg, setErrorMsg] = useState("");
-  const [stockError, setStockError] = useState(null);
+  const [checkoutErrors, setCheckoutErrors] = useState({});
   const [slide, setSlide] = useState(0);
+  const [previousSlide, setPreviousSlide] = useState(null);
+  const [footerVisible, setFooterVisible] = useState(false);
+  const [footerHeight, setFooterHeight] = useState(0);
+  const footerRef = useRef(null);
+
+  useEffect(() => {
+    const footer = footerRef.current;
+    if (!footer) return undefined;
+
+    const updateFooterHeight = () => setFooterHeight(footer.offsetHeight);
+    updateFooterHeight();
+
+    const intersectionObserver = new IntersectionObserver(
+      ([entry]) => setFooterVisible(entry.isIntersecting),
+      { threshold: 0 }
+    );
+    intersectionObserver.observe(footer);
+
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(updateFooterHeight);
+    resizeObserver?.observe(footer);
+
+    return () => {
+      intersectionObserver.disconnect();
+      resizeObserver?.disconnect();
+    };
+  }, []);
 
   const menuSlides = useMemo(
     () => {
@@ -75,50 +143,37 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
     [menu]
   );
   const heroCount = menuSlides.length;
+  const activeSlide = heroCount > 0 ? slide % heroCount : 0;
   useEffect(() => {
     if (heroCount <= 1) return;
-    const t = setInterval(() => {
-      setSlide((current) => {
-        let next = current;
-        while (next === current) next = Math.floor(Math.random() * heroCount);
-        return next;
-      });
+    let next = activeSlide;
+    while (next === activeSlide) next = Math.floor(Math.random() * heroCount);
+
+    // Download only the upcoming slide, instead of mounting every menu photo
+    // at zero opacity and making the browser fetch the entire catalog.
+    const preload = new Image();
+    preload.src = menuSlides[next].src;
+
+    const timer = setTimeout(() => {
+      setPreviousSlide(activeSlide);
+      setSlide(next);
     }, 5000);
-    return () => clearInterval(t);
-  }, [heroCount]);
-
-  useEffect(() => {
-    if (slide >= heroCount) setSlide(0);
-  }, [heroCount, slide]);
-
-  const isAvailable = (id) => inventory[id]?.available !== false;
+    return () => clearTimeout(timer);
+  }, [activeSlide, heroCount, menuSlides]);
 
   // Effective price: prefer admin override stored in inventory, else MENU price
   const priceOf = (item) => (inventory[item.id]?.price != null ? inventory[item.id].price : item.price);
-  // Inventory normally comes from /api/inventory. The menu endpoint also
-  // includes stock, so use it as a fallback while inventory is still loading.
-  const stockOf = (item) => {
-    const stock = Number(inventory[item.id]?.stock ?? item.stock);
-    return Number.isFinite(stock) && stock >= 0 ? stock : null;
-  };
-
+  // The public menu response includes the current inventory overlay. Admin
+  // inventory management still uses its dedicated protected mutation route.
   const addItem = (item) => {
-    if (!isAvailable(item.id)) return;
+    if (!liveReady) return;
     const step = item.step || 1;
     const minQty = item.minQty || step;
-    const availableStock = stockOf(item);
-    const currentQty = cart[item.id] || 0;
-    const proposedQty = currentQty === 0 ? minQty : currentQty + step;
-    if (availableStock !== null && proposedQty > availableStock) {
-      setStockError(item.id);
-      return;
-    }
-    setStockError((currentError) => (currentError === item.id ? null : currentError));
     setCart((c) => {
       const current = c[item.id] || 0;
       const next = current === 0 ? minQty : current + step;
-      if (availableStock !== null && next > availableStock) return c;
-      return { ...c, [item.id]: Math.round(next * 100) / 100 };
+      // 3 decimal places, matching the server's quantity validation.
+      return { ...c, [item.id]: Math.round(next * 1000) / 1000 };
     });
   };
   const decItem = (id, item) => {
@@ -127,9 +182,8 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
       if (!next[id]) return next;
       const step = item?.step || 1;
       const minQty = item?.minQty || 1;
-      next[id] = Math.round((next[id] - step) * 100) / 100;
+      next[id] = Math.round((next[id] - step) * 1000) / 1000;
       if (next[id] < minQty) delete next[id];
-      setStockError((currentError) => (currentError === id ? null : currentError));
       return next;
     });
   };
@@ -141,58 +195,106 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
       return { ...base, qty, price: priceOf(base) };
     })
     .filter(Boolean);
+  // Items the kitchen paused or removed after the customer added them. They are
+  // never sent at checkout; tell the customer instead of dropping them silently.
+  const unavailableCartCount = liveReady
+    ? Object.keys(cart).filter((id) => !menu.some((m) => m.id === id)).length
+    : 0;
+  const unavailableCartNotice = unavailableCartCount > 0 && (
+    <p role="status" className="rounded-lg border border-amber-300/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+      {unavailableCartCount === 1 ? "1 item" : `${unavailableCartCount} items`} in your cart{" "}
+      {unavailableCartCount === 1 ? "is" : "are"} no longer available and won't be included in your order.
+    </p>
+  );
   const cartCount = cartLines.reduce((s, l) => s + l.qty, 0);
   const cartTotal = cartLines.reduce((s, l) => s + l.qty * l.price, 0);
-  const overstockedLine = cartLines.find((line) => {
-    const stock = stockOf(line);
-    return stock !== null && line.qty > stock;
-  });
+  const cartPlacement = floatingCartPlacement(footerVisible, footerHeight);
+  const indiaNow = indiaDateTime();
+  const minimumDeliveryDate = indiaNow.date;
+  const availableDeliverySlots = form.deliveryDate === indiaNow.date
+    ? DELIVERY_SLOTS.filter((slot) => Number(slot.id.split("-")[0]) * 60 >= indiaNow.minutes)
+    : DELIVERY_SLOTS;
+  const selectedSlotIsAvailable = availableDeliverySlots.some((slot) => slot.id === form.deliverySlot);
+  const sundayBlocked = mainsSundayBlocked(cartLines, form.deliveryDate, form.mode);
+  const checkoutOrder = {
+    items: cartLines.map((l) => ({ id: l.id, qty: l.qty })),
+    customer: {
+      name: form.name.trim(), phone: form.phone.trim(), address: form.address.trim(),
+      notes: form.notes.trim(), mode: form.mode, location: form.location || null,
+      paymentMethod: form.paymentMethod, deliveryDate: form.deliveryDate, deliverySlot: form.deliverySlot,
+    },
+  };
+  // Only an unchanged previously submitted payload can bypass client time gates.
+  // The backend still rejects new/unsaved expired purchases before inserting.
+  const isPendingRetry = pendingAttempt?.fingerprint === JSON.stringify(checkoutOrder);
 
-  const submitOrder = async () => {
-    if (overstockedLine) {
-      setStockError(overstockedLine.id);
-      setErrorMsg(`Insufficient stock for ${overstockedLine.name}. Only ${stockOf(overstockedLine)} available.`);
+  const submitOrder = async (retryOriginal = false) => {
+    if (submittingRef.current) return;
+    // The fingerprint retains the exact unresolved payload in memory. Never
+    // rebuild a retry from a refreshed menu that may now hide an ordered item.
+    const order = retryOriginal === true && pendingAttempt
+      ? JSON.parse(pendingAttempt.fingerprint) : { ...checkoutOrder };
+    const isPendingRetry = pendingAttempt?.fingerprint === JSON.stringify(order);
+    if (!liveReady && !isPendingRetry) {
+      setErrorMsg("Please wait while we confirm current prices and availability.");
+      return;
+    }
+    if (sundayBlocked && !isPendingRetry) {
+      setCheckoutErrors((current) => ({ ...current, deliveryDate: true }));
+      setErrorMsg("Mains-only orders cannot be delivered on Sunday. Choose another date or include fried or frozen snacks.");
       return;
     }
     const hasLocation = form.location?.lat != null && form.location?.lng != null;
-    if (
-      !form.name.trim() ||
-      !form.phone.trim() ||
-      !form.deliveryDate ||
-      !form.deliverySlot ||
-      (form.mode === "Delivery" && !form.address.trim() && !hasLocation)
-    )
-      return;
-    setSubmitting(true);
-    const order = {
-      id: genId(),
-      invoiceId: genInvoiceId(),
-      items: cartLines.map((l) => ({ id: l.id, name: l.name, price: l.price, qty: l.qty })),
-      total: cartTotal,
-      customer: {
-        name: form.name.trim(),
-        phone: form.phone.trim(),
-        address: form.address.trim(),
-        notes: form.notes.trim(),
-        mode: form.mode,
-        location: form.location || null,
-        paymentMethod: form.paymentMethod,
-        deliveryDate: form.deliveryDate,
-        deliverySlot: form.deliverySlot,
-      },
-      status: "pending",
-      createdAt: Date.now(),
+    const requiredErrors = {
+      name: !form.name.trim(),
+      phone: !/^\d{10}$/.test(form.phone),
+      location: form.mode === "Delivery" && !form.address.trim() && !hasLocation,
+      deliveryDate: !form.deliveryDate || (!isPendingRetry && form.deliveryDate < minimumDeliveryDate),
+      deliverySlot: !form.deliverySlot || (!isPendingRetry && !selectedSlotIsAvailable),
     };
+    setCheckoutErrors(requiredErrors);
+    if (!isPendingRetry && Object.values(requiredErrors).some(Boolean)) {
+      setErrorMsg("Please fill in or correct the highlighted required fields.");
+      return;
+    }
+    if (pendingAttempt && !isPendingRetry) {
+      setErrorMsg("Your previous order has not been confirmed yet. Retry the original order before submitting changes, or contact the kitchen.");
+      return;
+    }
+    if (!isPendingRetry && form.deliveryDate === indiaNow.date && !selectedSlotIsAvailable) {
+      setCheckoutErrors((current) => ({ ...current, deliverySlot: true }));
+      setErrorMsg("That same-day delivery slot has already started. Please choose a later slot.");
+      return;
+    }
+    setSubmitting(true);
+    submittingRef.current = true;
     try {
-      await createOrder(order);
+      const attempt = checkoutAttempt(pendingAttempt, order);
+      setPendingAttempt(attempt);
+      const created = await createOrder(order, attempt.key);
+      order.id = created.id;
+      order.invoiceId = created.invoice_id;
+      order.total = Number(created.total);
+      order.items = created.items;
+      order.status = created.status;
+      order.createdAt = new Date(created.created_at).getTime();
     } catch (err) {
+      // These responses definitively rejected this attempt before saving it.
+      // Network/server uncertainty must retain the original key and payload.
+      if ([400, 429].includes(err.status)) setPendingAttempt(null);
       console.error("Failed to place order:", err);
       setSubmitting(false);
-      setErrorMsg("Sorry, we couldn't place your order. Please check your connection and try again.");
+      submittingRef.current = false;
+      setErrorMsg([400, 409, 429, 503].includes(err.status)
+        ? err.message
+        : "Sorry, we couldn't place your order. Please check your details or connection and try again.");
       return;
     }
     setSubmitting(false);
+    submittingRef.current = false;
+    setPendingAttempt(null);
     setErrorMsg("");
+    setCheckoutErrors({});
     setCart({});
     setCheckoutOpen(false);
     setCartOpen(false);
@@ -202,23 +304,35 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
     setConfirmedOrder(order);
   };
 
-  const itemsForTab = useMemo(() => menu.filter((m) => m.cat === tab), [menu, tab]);
+  const itemsForTab = useMemo(() => menu.filter((m) => m.cat === tab
+    && (tab !== "mains" || mainsTab === "all" || (mainsTab === "combos" ? m.isCombo : !m.isCombo)))
+    .sort((a, b) => Number(Boolean(b.isCombo)) - Number(Boolean(a.isCombo))), [menu, tab, mainsTab]);
+
+  // Group only the customer-facing card. Original IDs/quantities remain intact
+  // for cart lines, server pricing, invoices and independent admin price edits.
+  const chattipathiriOptions = CHATTIPATHIRI_WEIGHTS
+    .map((weight) => ({ ...weight, item: itemsForTab.find((item) => item.id === weight.id) }))
+    .filter((weight) => weight.item);
+  const selectedChattipathiri = chattipathiriOptions.find((weight) => weight.id === chattipathiriId)
+    || chattipathiriOptions[0];
+  const displayItems = itemsForTab.filter((item) => !CHATTIPATHIRI_WEIGHTS.some((weight) => weight.id === item.id)
+    || item.id === chattipathiriOptions[0]?.id);
 
   return (
-    <div className="customer-editorial min-h-screen bg-[#F6EDD7] text-[#3F3B24]" style={{ fontFamily: "'Work Sans', sans-serif" }}>
-      <style>{FONTS}</style>
+    <div className="customer-editorial relative min-h-screen bg-[#F6EDD7] text-[#3F3B24]" style={{ fontFamily: "var(--font-sans)" }}>
+      <style>{`${FONTS}\n@keyframes heroCrossfade { from { opacity: 0; } to { opacity: 1; } }\n@media (prefers-reduced-motion: reduce) { .hero-slide-enter { animation: none !important; } }`}</style>
 
       {/* Hero */}
       <header className="relative overflow-hidden bg-[#F6EDD7]">
         <nav className="relative z-10 w-full px-5 sm:px-8 py-5 flex items-center justify-center text-center bg-[#6F6F32] shadow-[0_8px_24px_rgba(63,59,36,0.12)]">
-          <a href="#top" className="text-2xl sm:text-3xl text-[#FFF8E8]" style={{ fontFamily: "'Fraunces', serif", fontWeight: 700 }}>
+          <a href="#top" className="text-2xl sm:text-3xl text-[#FFF8E8]" style={{ fontFamily: "var(--font-serif)", fontWeight: 700 }}>
             SEMI'S KITCHEN
           </a>
         </nav>
 
         <div id="top" className="relative max-w-6xl mx-auto px-5 sm:px-8 pt-6 pb-16 sm:pt-12 sm:pb-24 grid lg:grid-cols-[0.95fr_1.05fr] gap-12 lg:gap-16 items-center">
           <div className="relative z-10 text-center lg:text-left">
-            <h1 className="text-[2.75rem] leading-[1.02] sm:text-6xl lg:text-7xl text-[#3F3B24] tracking-[-0.035em]" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>
+            <h1 className="text-[2.75rem] leading-[1.02] sm:text-6xl lg:text-7xl text-[#3F3B24] tracking-[-0.035em]" style={{ fontFamily: "var(--font-serif)", fontWeight: 600 }}>
               Authentic Malabar food, made with a little more love.
             </h1>
             <p className="mt-6 max-w-xl mx-auto lg:mx-0 text-[#6F6657] text-base sm:text-lg leading-relaxed">
@@ -229,9 +343,31 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
           <div className="relative mx-auto w-[84%] sm:w-full max-w-[600px]">
             <div className="absolute -inset-3 sm:-inset-8 bg-[#D99168] rounded-[42%_58%_55%_45%/48%_42%_58%_52%] rotate-[-4deg]" />
             <div className="relative aspect-[4/3] sm:aspect-[5/4] overflow-hidden rounded-[38%_62%_52%_48%/45%_40%_60%_55%] shadow-[0_24px_60px_rgba(63,59,36,0.22)]">
-              {menuSlides.length > 0 ? menuSlides.map((item, i) => (
-                <img key={`${item.src}-${i}`} src={item.src} alt={i === slide ? item.name : ""} aria-hidden={i !== slide} className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-1000 ${i === slide ? "opacity-100" : "opacity-0"}`} />
-              )) : (
+              {menuSlides.length > 0 ? (
+                <>
+                  {previousSlide !== null && menuSlides[previousSlide] && previousSlide !== activeSlide && (
+                    <img
+                      key={`previous-${menuSlides[previousSlide].src}`}
+                      src={menuSlides[previousSlide].src}
+                      alt=""
+                      aria-hidden="true"
+                      decoding="async"
+                      className="absolute inset-0 w-full h-full object-cover"
+                    />
+                  )}
+                  <img
+                    key={menuSlides[activeSlide].src}
+                    src={menuSlides[activeSlide].src}
+                    alt={menuSlides[activeSlide].name}
+                    loading="eager"
+                    fetchPriority="high"
+                    decoding="async"
+                    className="hero-slide-enter absolute inset-0 w-full h-full object-cover"
+                    style={{ animation: "heroCrossfade 900ms ease-in-out both" }}
+                    onAnimationEnd={() => setPreviousSlide(null)}
+                  />
+                </>
+              ) : (
                 <div className="w-full h-full bg-[#E8D7B5]" />
               )}
             </div>
@@ -258,14 +394,22 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
             );
           })}
         </div>
+        {tab === "mains" && (
+          <nav aria-label="Biriyani and curries sections" className="mt-4 flex justify-center gap-3">
+            {[["all", "Combos & Mains"], ["combos", "Combos"], ["mains", "Mains"]].map(([id, label]) => (
+              <button key={id} onClick={() => setMainsTab(id)} aria-pressed={mainsTab === id}
+                className={`rounded-full px-4 py-2 text-sm border ${mainsTab === id ? "bg-[#6F6F32] text-white" : "border-[#6F6F32]"}`}>{label}</button>
+            ))}
+          </nav>
+        )}
       </section>
 
       {/* Menu grid */}
       <main className="max-w-6xl mx-auto px-4 sm:px-8 pt-8 pb-32 bg-[#FFF8E8]">
-        {tab === "mains" && (
-          <p className="mb-6 text-sm text-[#7D4A32] bg-[#D99168]/15 border border-[#C8754F]/25 rounded-2xl px-4 py-3 text-center">
-            Please note: same-day delivery is not available for Biriyani &amp; Curry items.
-          </p>
+        {!liveReady && menuState === "loading" && (
+          <div className="mb-5 rounded-xl border border-[#E8D7B5] bg-[#FFFCF3] px-4 py-3 text-center text-sm text-[#6F6657]" role="status">
+            Checking current prices and availability…
+          </div>
         )}
         {/* Menu grid — skeleton while the first load is in flight, a friendly
             offline message (with retry) if it failed, else the real items. */}
@@ -281,6 +425,8 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
                 Try again
               </button>
             </div>
+          ) : menuState === "ready" ? (
+            <p className="py-8 text-center text-[#6F6657]" role="status">No items are available for ordering right now.</p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" aria-busy="true" aria-label="Loading menu">
               {Array.from({ length: 6 }).map((_, i) => (
@@ -299,50 +445,51 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
           )
         ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6">
-          {itemsForTab.map((item) => {
-            const available = isAvailable(item.id);
+          {displayItems.map((entry) => {
+            const isChattipathiri = entry.id === chattipathiriOptions[0]?.id;
+            const item = isChattipathiri ? selectedChattipathiri.item : entry;
             const qty = cart[item.id] || 0;
             return (
               <div
-                key={item.id}
-                className={`group rounded-[1.5rem] border border-[#E8D7B5]/80 bg-[#FFFCF3] overflow-hidden shadow-[0_10px_28px_rgba(82,67,43,0.07)] transition-transform duration-300 hover:-translate-y-1 ${
-                  !available ? "opacity-50" : ""
-                }`}
+                key={entry.id}
+                className="group rounded-[1.5rem] border border-[#E8D7B5]/80 bg-[#FFFCF3] overflow-hidden shadow-[0_10px_28px_rgba(82,67,43,0.07)] transition-transform duration-300 hover:-translate-y-1"
               >
                 {/* Item image */}
                 <div className="w-full h-48 sm:h-52 bg-[#E8D7B5] overflow-hidden">
-                  <img
+                  {resolveImg(item.img) && <img
                     src={resolveImg(item.img)}
                     alt={item.name}
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
                     onError={(e) => {
                       e.target.style.display = "none";
                       e.target.nextElementSibling?.classList.remove("hidden");
                     }}
-                  />
-                  <div className="hidden w-full h-full flex items-center justify-center text-stone-600 text-xs">
-                    No image
+                  />}
+                  <div className={`${resolveImg(item.img) ? "hidden" : ""} w-full h-full flex items-center justify-center text-stone-600 text-sm`}>
+                    Photo coming soon
                   </div>
                 </div>
                 <div className="p-4 flex items-center justify-between gap-3">
-                  <div>
-                  <div className="text-lg text-[#3F3B24]" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>
-                      {item.name}
-                      <span className="text-stone-500 text-xs ml-1.5">{item.unit}</span>
+                  <div className="min-w-0 flex-1">
+                  <div className="text-lg text-[#3F3B24]" style={{ fontFamily: "var(--font-serif)", fontWeight: 600 }}>
+                      {isChattipathiri ? chattipathiriDisplayName(item.name, selectedChattipathiri.label) : item.name}
+                      {!isChattipathiri && <span className="inline-block max-w-full text-stone-500 text-xs ml-1.5">
+                        {item.unit?.replace(/(\d+(?:\.\d+)?)\s+(kg|gm?|pieces?|pack|combo)\b/gi, "$1\u00a0$2")}
+                      </span>}
                     </div>
                     <div className="text-[#C8754F] text-sm font-semibold mt-1">
                       {rupee(priceOf(item))}
-                      {item.minQty > 1 && <span className="text-stone-500 text-xs ml-1.5">· min {item.minQty}</span>}
+                      {item.minQty > 1 && (
+                        <span className="text-stone-500 text-xs ml-1.5">
+                          · min {item.minQty}{/piece/i.test(item.unit) ? " pieces" : ""}
+                        </span>
+                      )}
                       {item.seasonal && <span className="text-stone-500 text-xs ml-1.5">· seasonal price</span>}
                     </div>
-                    {!available && <div className="text-red-400 text-xs mt-1 font-medium">Sold out today</div>}
-                    {stockError === item.id && (
-                      <div className="text-red-600 text-xs mt-1 font-semibold" role="alert">
-                        Insufficient stock. Only {stockOf(item) ?? 0} available.
-                      </div>
-                    )}
                   </div>
-                  {available ? (
+                  {liveReady ? (
                     qty > 0 ? (
                       <div className="flex items-center gap-2 bg-green-950 rounded-lg border border-green-800 px-1 py-1 shrink-0">
                         <button onClick={() => decItem(item.id, item)} className="w-7 h-7 flex items-center justify-center text-stone-300 hover:text-amber-300">
@@ -362,9 +509,22 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
                       </button>
                     )
                   ) : (
-                    <div className="shrink-0 px-3.5 py-1.5 rounded-lg bg-green-800 text-stone-500 text-sm font-semibold">Sold out</div>
+                    <div className="shrink-0 px-3.5 py-1.5 rounded-lg bg-[#E8D7B5] text-[#6F6657] text-xs font-semibold">Checking…</div>
                   )}
                 </div>
+                {isChattipathiri && (
+                  <div role="group" aria-label="Chattipathiri weight" className="px-4 pb-4 flex flex-wrap gap-2">
+                    {chattipathiriOptions.map((weight) => (
+                      <button key={weight.id} type="button" aria-pressed={item.id === weight.id}
+                        onClick={() => setChattipathiriId(weight.id)}
+                        className={`rounded-full border px-3 py-2 text-sm font-semibold transition-colors ${item.id === weight.id
+                          ? "bg-[#6F6F32] border-[#6F6F32] text-[#FFF8E8]"
+                          : "border-[#E8D7B5] text-[#3F3B24] hover:border-[#6F6F32]"}`}>
+                        {weight.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -372,11 +532,13 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
         )}
       </main>
 
+
       {/* Floating cart bar */}
       {cartCount > 0 && !cartOpen && !checkoutOpen && !confirmedOrder && (
         <button
           onClick={() => setCartOpen(true)}
-          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-[#6F6F32] text-[#FFF8E8] px-6 py-3.5 rounded-full shadow-[0_14px_36px_rgba(63,59,36,0.28)] font-semibold hover:bg-[#575726] transition-colors"
+          style={{ bottom: `${cartPlacement.bottom}px` }}
+          className={`${cartPlacement.position} left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 bg-[#6F6F32] text-[#FFF8E8] px-6 py-3.5 rounded-full shadow-[0_14px_36px_rgba(63,59,36,0.28)] font-semibold hover:bg-[#575726] transition-colors`}
         >
           <ShoppingBag className="w-5 h-5" />
           {rupee(cartTotal)}
@@ -389,10 +551,11 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
           <div className="absolute inset-0 bg-black/60" onClick={() => setCartOpen(false)} />
           <div className="relative w-full sm:w-[420px] bg-green-950 border-l border-green-900 h-full flex flex-col">
             <div className="flex items-center justify-between px-5 py-4 border-b border-green-900">
-              <h2 className="text-lg font-semibold text-stone-50" style={{ fontFamily: "'Fraunces', serif" }}>Your order</h2>
-              <button onClick={() => setCartOpen(false)}><X className="w-5 h-5 text-stone-400" /></button>
+              <h2 className="text-lg font-semibold text-stone-50" style={{ fontFamily: "var(--font-serif)" }}>Your order</h2>
+              <button onClick={() => setCartOpen(false)}><Plus className="w-5 h-5 text-stone-400" /></button>
             </div>
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+              {unavailableCartNotice}
               {cartLines.length === 0 && <p className="text-stone-500 text-sm">Your cart is empty.</p>}
               {cartLines.map((l) => (
                 <div key={l.id} className="flex flex-col gap-2 border-b border-green-900/60 pb-3">
@@ -408,11 +571,6 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
                     </div>
                   </div>
                   <div className="text-right text-sm text-amber-400 font-semibold">{rupee(l.qty * l.price)}</div>
-                  {stockError === l.id && (
-                    <div className="text-right text-red-600 text-xs font-semibold" role="alert">
-                      Insufficient stock. Only {stockOf(l) ?? 0} available.
-                    </div>
-                  )}
                 </div>
               ))}
             </div>
@@ -424,11 +582,9 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
                 </div>
                 <button
                   onClick={() => {
-                    if (overstockedLine) {
-                      setStockError(overstockedLine.id);
-                      return;
-                    }
                     setCartOpen(false);
+                    setCheckoutErrors({});
+                    setErrorMsg("");
                     setCheckoutOpen(true);
                   }}
                   className="w-full py-3 rounded-lg bg-amber-400 text-green-950 font-semibold hover:bg-amber-300 transition-colors"
@@ -447,7 +603,7 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
           <div className="absolute inset-0 bg-black/60" onClick={() => setCheckoutOpen(false)} />
           <div className="relative bg-green-950 border border-green-900 rounded-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-stone-50" style={{ fontFamily: "'Fraunces', serif" }}>Delivery details</h2>
+              <h2 className="text-lg font-semibold text-stone-50" style={{ fontFamily: "var(--font-serif)" }}>Delivery details</h2>
               <button onClick={() => setCheckoutOpen(false)}><X className="w-5 h-5 text-stone-400" /></button>
             </div>
             <div className="flex gap-2 mb-4">
@@ -464,7 +620,7 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
               ))}
             </div>
 {form.mode === "Delivery" && (
-              <p className="mb-4 text-sm text-amber-300/90 bg-amber-400/10 border border-amber-400/30 rounded-lg px-3 py-2">
+              <p className="mb-4 text-sm font-semibold text-[#8F341F] bg-amber-500/25 border border-amber-300 rounded-lg px-3 py-2">
                 Delivery charge is not included in the bill.
               </p>
             )}
@@ -496,36 +652,75 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
               <input
                 placeholder="Full name"
                 value={form.name}
-                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                className="w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                aria-invalid={checkoutErrors.name || undefined}
+                onChange={(e) => { setForm((f) => ({ ...f, name: e.target.value })); setCheckoutErrors((current) => ({ ...current, name: false })); }}
+                className={`w-full bg-green-900/60 border rounded-lg px-3.5 py-2.5 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 ${checkoutErrors.name ? "border-red-400 ring-2 ring-red-400/40" : "border-green-800 focus:ring-amber-400"}`}
               />
+              {checkoutErrors.name && <p className="-mt-2 text-xs text-red-300">Please enter your full name.</p>}
               <input
                 placeholder="Phone number"
+                type="tel"
+                inputMode="numeric"
+                maxLength={10}
+                pattern="[0-9]{10}"
                 value={form.phone}
-                onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-                className="w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                aria-invalid={checkoutErrors.phone || undefined}
+                onChange={(e) => {
+                  const phone = e.target.value.replace(/\D/g, "").slice(0, 10);
+                  setForm((f) => ({ ...f, phone }));
+                  setCheckoutErrors((current) => ({ ...current, phone: false }));
+                }}
+                className={`w-full bg-green-900/60 border rounded-lg px-3.5 py-2.5 text-sm text-stone-100 placeholder-stone-500 focus:outline-none focus:ring-2 ${checkoutErrors.phone ? "border-red-400 ring-2 ring-red-400/40" : "border-green-800 focus:ring-amber-400"}`}
               />
+              {checkoutErrors.phone && <p className="-mt-2 text-xs text-red-300">Please enter a 10-digit phone number.</p>}
               {form.mode === "Delivery" && (
-                <LocationPicker
-                  value={form.location}
-                  onChange={(loc) =>
-                    setForm((f) => {
-                      const merged = { ...(f.location || {}), ...loc };
-                      return { ...f, location: merged, address: merged.address || f.address };
-                    })
-                  }
-                />
+                <div className={checkoutErrors.location ? "rounded-xl ring-2 ring-red-400" : ""}>
+                <Suspense
+                  fallback={(
+                    <div className="h-80 rounded-xl border border-green-800 bg-green-900/40 flex items-center justify-center text-sm text-stone-400">
+                      Loading delivery map…
+                    </div>
+                  )}
+                >
+                  <LocationPicker
+                    value={form.location}
+                    onChange={(loc) => {
+                      setCheckoutErrors((current) => ({ ...current, location: false }));
+                      setForm((f) => {
+                        const merged = { ...(f.location || {}), ...loc };
+                        return { ...f, location: merged, address: merged.address || f.address };
+                      });
+                    }}
+                  />
+                </Suspense>
+                {checkoutErrors.location && <p className="mt-2 text-xs text-red-300">Please select a delivery location or enter an address.</p>}
+                </div>
               )}
               <div>
                 <label className="text-xs text-stone-400 mb-1.5 block">When should the order arrive?</label>
                 <div className="relative overflow-hidden rounded-lg">
                   <input
                     type="date"
-                    min={todayISO()}
+                    min={minimumDeliveryDate}
                     value={form.deliveryDate}
-                    onChange={(e) => setForm((f) => ({ ...f, deliveryDate: e.target.value }))}
+                    aria-invalid={checkoutErrors.deliveryDate || undefined}
+                    onChange={(e) => {
+                      const selectedDate = e.target.value;
+                      // A date input can emit a temporary year such as 0002 while
+                      // the customer is still typing. Preserve that value here;
+                      // validating on each keystroke would reset the day/month.
+                      setForm((f) => applyDeliveryDateInput(f, selectedDate));
+                      setCheckoutErrors((current) => ({ ...current, deliveryDate: false, deliverySlot: false }));
+                      setErrorMsg("");
+                    }}
+                    onBlur={(e) => {
+                      if (deliveryDateIsUnavailable(e.currentTarget.value, minimumDeliveryDate)) {
+                        setCheckoutErrors((current) => ({ ...current, deliveryDate: true, deliverySlot: false }));
+                        setErrorMsg("Please choose an available date that has not already passed.");
+                      }
+                    }}
                     style={{ WebkitAppearance: "none", appearance: "none", boxSizing: "border-box" }}
-                    className="block w-full max-w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
+                    className={`block w-full max-w-full bg-green-900/60 border rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 [color-scheme:dark] ${checkoutErrors.deliveryDate ? "border-red-400 ring-2 ring-red-400/40" : "border-green-800 focus:ring-amber-400"}`}
                   />
                   {IS_IOS && !form.deliveryDate && (
                     <span className="absolute inset-y-0 left-3.5 flex items-center text-sm text-stone-500 pointer-events-none">
@@ -533,23 +728,32 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
                     </span>
                   )}
                 </div>
+                {checkoutErrors.deliveryDate && <p className="mt-1 text-xs text-red-300">Please choose an available delivery date.</p>}
+                {sundayBlocked && <p role="alert" className="mt-2 text-sm text-red-300">Mains-only orders cannot be delivered on Sunday. Choose another date or include fried or frozen snacks.</p>}
                 {/* A native <select> so mobile OSes render their own picker —
                     iOS shows an actual spinning wheel, Android a scrollable
                     list — instead of a custom-built one. */}
                 <select
                   value={form.deliverySlot}
-                  onChange={(e) => setForm((f) => ({ ...f, deliverySlot: e.target.value }))}
-                  className="mt-2 w-full bg-green-900/60 border border-green-800 rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 focus:ring-amber-400 [color-scheme:dark]"
+                  aria-invalid={checkoutErrors.deliverySlot || undefined}
+                  onChange={(e) => { setForm((f) => ({ ...f, deliverySlot: e.target.value })); setCheckoutErrors((current) => ({ ...current, deliverySlot: false })); }}
+                  className={`mt-2 w-full bg-green-900/60 border rounded-lg px-3.5 py-2.5 text-sm text-stone-100 focus:outline-none focus:ring-2 [color-scheme:dark] ${checkoutErrors.deliverySlot ? "border-red-400 ring-2 ring-red-400/40" : "border-green-800 focus:ring-amber-400"}`}
                 >
                   <option value="" disabled>
                     Select a time slot
                   </option>
-                  {DELIVERY_SLOTS.map((slot) => (
+                  {availableDeliverySlots.map((slot) => (
                     <option key={slot.id} value={slot.id}>
                       {slot.label}
                     </option>
                   ))}
                 </select>
+                {checkoutErrors.deliverySlot && <p className="mt-1 text-xs text-red-300">Please choose an available time slot.</p>}
+                {form.deliveryDate === indiaNow.date && (
+                  <p className="mt-2 text-xs text-stone-400">
+                    Past same-day time slots are unavailable. You can choose any remaining slot today.
+                  </p>
+                )}
               </div>
               <textarea
                 placeholder="Notes (spice level, allergies, etc.) — optional"
@@ -563,17 +767,20 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
               <span className="text-sm">Order total</span>
               <span className="font-semibold text-amber-400">{rupee(cartTotal)}</span>
             </div>
+            {unavailableCartNotice && <div className="mt-2">{unavailableCartNotice}</div>}
             {errorMsg && (
-              <p className="text-red-400 text-sm mt-2">{errorMsg}</p>
+              <p role="alert" className="text-red-400 text-sm mt-2">{errorMsg}</p>
+            )}
+            {pendingAttempt && !submitting && (
+              <div className="mt-3 rounded-lg border border-amber-400/50 p-3 text-sm text-amber-100">
+                <p>The previous submission is unconfirmed. Retry its original items and details to check the result without placing a second order.</p>
+                <button type="button" onClick={() => submitOrder(true)} className="mt-2 underline font-semibold">Retry original order</button>
+              </div>
             )}
             <button
               disabled={
                 submitting ||
-                !form.name.trim() ||
-                !form.phone.trim() ||
-                !form.deliveryDate ||
-                !form.deliverySlot ||
-                (form.mode === "Delivery" && !form.address.trim() && !(form.location?.lat != null && form.location?.lng != null))
+                (!liveReady && !isPendingRetry)
               }
               onClick={submitOrder}
               className="w-full mt-3 py-3 rounded-lg bg-amber-400 text-green-950 font-semibold hover:bg-amber-300 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -585,12 +792,25 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
       )}
 
       {/* Footer */}
-      <footer className="relative bg-[#3F3B24] text-[#FFF8E8] px-5 pt-16 pb-10 text-center overflow-hidden">
+      <footer ref={footerRef} className="relative bg-[#3F3B24] text-[#FFF8E8] px-5 pt-16 pb-10 text-center overflow-hidden">
         <div className="absolute -top-8 left-[-5%] w-[110%] h-16 bg-[#FFF8E8] rounded-[50%]" aria-hidden="true" />
         <div className="relative">
-          <div className="text-3xl mb-2" style={{ fontFamily: "'Fraunces', serif", fontWeight: 600 }}>Semi's Kitchen</div>
+          <div className="text-3xl mb-2" style={{ fontFamily: "var(--font-serif)", fontWeight: 600 }}>Semi's Kitchen</div>
           <p className="text-[#E8D7B5] text-sm">Malabar snacks &amp; curries, made to order</p>
-          <p className="mt-8 text-xs text-[#E8D7B5]/55">Built by <span className="font-semibold tracking-[0.16em]">QOZYD</span></p>
+          <nav aria-label="Footer" className="mt-7 flex flex-wrap items-center justify-center gap-x-5 gap-y-3 text-sm text-[#E8D7B5]">
+            <a href="/privacy" className="hover:text-white hover:underline">Privacy Policy</a>
+            <a href="/terms" className="hover:text-white hover:underline">Terms</a>
+            <a
+              href="https://www.instagram.com/semisofficial_/"
+              target="_blank"
+              rel="noreferrer"
+              aria-label="Semi's Kitchen on Instagram"
+              className="inline-flex items-center gap-2 hover:text-white hover:underline"
+            >
+              <InstagramIcon className="h-4 w-4" />
+            </a>
+          </nav>
+          <p className="mt-7 text-xs text-[#E8D7B5]/55">Built by <span className="font-semibold tracking-[0.16em]">QOZYD</span></p>
         </div>
       </footer>
 
@@ -602,7 +822,7 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
             <div className="w-14 h-14 rounded-full bg-amber-400 flex items-center justify-center mx-auto mb-4">
               <Check className="w-7 h-7 text-green-950" />
             </div>
-            <h2 className="text-xl font-semibold text-stone-50 mb-1" style={{ fontFamily: "'Fraunces', serif" }}>Order sent!</h2>
+            <h2 className="text-xl font-semibold text-stone-50 mb-1" style={{ fontFamily: "var(--font-serif)" }}>Order sent!</h2>
             <p className="text-stone-400 text-sm mb-4">We'll confirm on WhatsApp/call shortly. Keep these IDs for your reference.</p>
             <div className="bg-green-900/60 border border-green-800 rounded-lg py-2.5 text-amber-300 font-mono tracking-wider text-sm mb-2">
               {confirmedOrder.id}
@@ -627,39 +847,65 @@ function CustomerApp({ menu, inventory, menuState, onRetryMenu }) {
    Homepage (customer site)
 --------------------------------------------------------- */
 export default function App() {
-  // Hybrid: start from the locally-cached catalog so the menu paints instantly
-  // even before the backend responds, then overlay the live inventory (price /
-  // stock / availability) via the refresh below. Falls back to an empty array
-  // on the very first visit (no cache yet), same as before.
-  const [menu, setMenu] = useState(() => loadMenuStored());
+  // Availability must be confirmed before displaying dishes: cached snapshots
+  // can contain products the kitchen has since paused.
+  const [menu, setMenu] = useState([]);
   const [inventory, setInventory] = useState({});
-  // "ready" if a cached catalog is already onscreen to show, else "loading".
-  // Only the very first visit (no cache yet) ever shows the loading skeleton;
-  // returning visitors start "ready" and the live refresh just updates in place.
-  const [menuState, setMenuState] = useState(() => (menu.length ? "ready" : "loading"));
+  const [liveReady, setLiveReady] = useState(false);
+  const [menuState, setMenuState] = useState("loading");
+  const menuRequest = useRef(0);
+  // True once one live menu has loaded. Background refreshes then keep showing
+  // that menu (and the customer's cart) instead of blanking it on a network
+  // blip. Checkout still re-validates prices and availability on the server.
+  const hasLiveMenu = useRef(false);
 
   const refreshMenu = useCallback(async () => {
-    setMenuState("loading");
+    const request = ++menuRequest.current;
+    if (!hasLiveMenu.current) {
+      setLiveReady(false);
+      setMenuState("loading");
+    }
     try {
-      setMenu(await loadMenu());
+      const liveMenu = await loadMenu();
+      if (request !== menuRequest.current) return;
+      hasLiveMenu.current = true;
+      setMenu(liveMenu);
+      setInventory(Object.fromEntries(liveMenu.map((item) => [item.id, {
+        stock: item.stock,
+        available: item.available,
+        price: item.price,
+      }])));
+      setLiveReady(true);
       setMenuState("ready");
     } catch {
-      // No cached catalog and the backend is unreachable — show a friendly
-      // offline message with a retry instead of a blank grid.
+      if (request !== menuRequest.current || hasLiveMenu.current) return;
+      setLiveReady(false);
+      setMenu([]);
       setMenuState("error");
     }
   }, []);
-  const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
   useEffect(() => {
-    refreshMenu();
-    refreshInventory();
-  }, [refreshMenu, refreshInventory]);
+    const timer = setTimeout(() => {
+      refreshMenu();
+    }, 0);
+    const refreshVisible = () => { if (document.visibilityState === "visible") refreshMenu(); };
+    const poll = setInterval(refreshVisible, 60000);
+    window.addEventListener('focus', refreshVisible);
+    document.addEventListener('visibilitychange', refreshVisible);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      window.removeEventListener('focus', refreshVisible);
+      document.removeEventListener('visibilitychange', refreshVisible);
+    };
+  }, [refreshMenu]);
 
   return (
     <CustomerApp
       menu={menu}
       inventory={inventory}
       menuState={menuState}
+      liveReady={liveReady}
       onRetryMenu={() => refreshMenu()}
     />
   );

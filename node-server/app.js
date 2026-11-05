@@ -2,42 +2,49 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-const db = require("./config/db");
+const helmet = require("helmet");
 const inventoryRoutes = require("./routes/inventoryRoutes");
 const menuRoutes = require("./routes/menuRoutes");
 const orderRoutes = require("./routes/orderRoutes");
 const salesRoutes = require("./routes/salesRoutes");
 const invoiceRoutes = require("./routes/invoiceRoutes");
+const authRoutes = require("./routes/authRoutes");
+const paymentQrRoutes = require("./routes/paymentQrRoutes");
+const itemsRoutes = require("./routes/itemsRoutes");
+const { apiLimiter } = require("./middleware/rateLimits");
 
 const app = express();
+// Local/direct hosting must not let callers choose their rate-limit identity.
+// Render terminates connections at its proxy. Do not increase the hop count
+// without verifying BOTH the direct API and static-site rewrite paths.
+const proxyHops = process.env.TRUST_PROXY_HOPS ?? (process.env.RENDER === "true" ? "1" : "0");
+if (!/^[0-3]$/.test(proxyHops)) throw new Error("TRUST_PROXY_HOPS must be an integer from 0 to 3");
+app.set("trust proxy", Number(proxyHops));
 
-// Explicitly list all authorized dev and production domains in this array.
-// To add a new domain WITHOUT a code change, set the ALLOWED_ORIGINS env var
-// on the backend deployment (Vercel -> the project -> Settings -> Environment
-// Variables) to a comma-separated list extra origins, e.g.
-//   ALLOWED_ORIGINS=https://trial-tetrix1.vercel.app
+// Explicitly list the canonical production domains in this array. To add a
+// preview or replacement domain without changing code, set ALLOWED_ORIGINS on
+// the backend service to a comma-separated list of additional origins.
 // Origins are matched exactly (scheme + host + port), so include https:// and
 // a www vs. bare domain separately if you use both.
 const DEFAULT_ORIGINS = [
-  "https://trial-tetrix1.vercel.app",
-  "https://semiskitchen.vercel.app",
   "https://semiskitchen.in",
-  "https://www.semiskitchen.in",
-  "http://localhost:5173",
-  "http://192.168.29.241:5173"
+  "https://www.semiskitchen.in"
 ];
 
-// Append any extra origins from env (comma-separated), trimming whitespace so
-// entries like "http://localhost:5173, https://trial-tetrix1.vercel.app" work.
-const allowedOrigins = DEFAULT_ORIGINS.concat(
-  (process.env.ALLOWED_ORIGINS || "")
+function getAllowedOrigins(nodeEnv = process.env.NODE_ENV, extraOrigins = process.env.ALLOWED_ORIGINS) {
+  const developmentOrigins = nodeEnv === "production" ? [] : ["http://localhost:5173"];
+  const configuredOrigins = (extraOrigins || "")
     .split(",")
     .map((s) => s.trim())
-    .filter(Boolean)
-);
+    .filter(Boolean);
+  return [...new Set(DEFAULT_ORIGINS.concat(developmentOrigins, configuredOrigins))];
+}
+
+// Append any extra origins from env (comma-separated), trimming whitespace.
+const allowedOrigins = getAllowedOrigins();
 
 // 2. Use a dynamic matching function for multi-domain support
-app.use(cors({
+const corsOptions = {
   origin: function (origin, callback) {
     // Allow non-browser requests (like server-to-server, Postman, or mobile tests)
     if (!origin) return callback(null, true);
@@ -50,20 +57,31 @@ app.use(cors({
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
-}));
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Idempotency-Key", "If-Match"]
+};
+app.use(cors(corsOptions));
 
 // 3. Explicitly intercept browser security handshake preflight checks.
 // (Express 5 / path-to-regexp v8 requires a NAMED splat instead of a bare "*")
-app.options("/*splat", cors());
+app.options("/*splat", cors(corsOptions));
 
-app.use(express.json());
+app.use(helmet({ crossOriginResourcePolicy: { policy: "same-site" } }));
+app.use(express.json({ limit: "32kb", strict: true }));
+app.use("/api", apiLimiter);
 
+app.use("/api/admin", authRoutes);
 app.use("/api/menu", menuRoutes);
 app.use("/api/inventory", inventoryRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/sales", salesRoutes);
 app.use("/api/invoices", invoiceRoutes);
+app.use("/api/payment-qr", paymentQrRoutes);
+app.use("/api/items", itemsRoutes);
+
+// Platform health checks must not wake Neon or consume database CU-hours.
+app.get("/health", (req, res) => {
+  res.json({ success: true, status: "healthy" });
+});
 
 app.get("/", (req, res) => {
   res.json({
@@ -72,13 +90,23 @@ app.get("/", (req, res) => {
   });
 });
 
-db.query("SELECT NOW()")
-  .then(() => {
-    console.log("✅ Connected to PostgreSQL");
-  })
-  .catch((err) => {
-    console.error("❌ Database connection failed:");
-    console.error(err.message);
-  });
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: "Endpoint not found" });
+});
+
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  const isCorsError = String(err?.message || "").startsWith("CORS policy restriction");
+  const status = isCorsError ? 403 : err?.type === "entity.too.large" ? 413
+    : err?.code === "AUTH_UNAVAILABLE" ? 503 : err?.type === "entity.parse.failed" ? 400 : 500;
+  const message = status === 403 ? "Origin not allowed"
+    : status === 413 ? "Request body is too large"
+    : status === 503 ? "Staff authentication is temporarily unavailable. Please try again."
+    : status === 400 ? "Invalid JSON request body"
+    : "Unexpected server error";
+  console.error("Request failed:", err?.message || err);
+  res.status(status).json({ success: false, message });
+});
 
 module.exports = app;
+module.exports.getAllowedOrigins = getAllowedOrigins;

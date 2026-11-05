@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useNavigate } from 'react-router';
 import {
   X,
   Check,
   Phone,
   MapPin,
+  Menu,
+  RefreshCw,
   Lock,
   Package,
   Trash2,
@@ -15,91 +16,72 @@ Save,
   Download,
   Share2,
   Clock,
+  ChevronDown,
+  ArrowLeftRight,
+  Plus,
+  Minus,
 } from "lucide-react";
 import {
   FONTS,
+  PAYMENT_QR_PATH,
   CATS,
   STATUS,
-  ADMIN_CODE,
   Logo,
   StatusPill,
+  SnackTypeBadge,
   rupee,
-  loadMenu,
-  loadInventory,
+  loadAdminMenu,
+  loadAdminInventory,
   updateInventoryField,
   fetchOrders,
   fetchArchivedOrders,
   archiveOrdersApi,
   deletePaidSyncedOrdersApi,
-decrementStockApi,
   updateOrderStatusApi,
+  acceptEditedOrderApi,
   updatePaymentStatusApi,
-  fetchSalesSummary,
   paymentMethodLabel,
   deliverySlotLabel,
   deliveryDateLabel,
   downloadInvoice,
   shareInvoiceOnWhatsApp,
-  downloadAllInvoices,
+  shareDeclineOnWhatsApp,
+  fetchInvoiceBatchInfo,
+  downloadInvoiceBatch,
   syncToSheets,
+  adminLogin,
+  checkAdminSession,
+  adminLogout,
+  deleteCompletedOrderApi,
+  fetchSalesSummary,
 } from "./lib/kitchen.jsx";
+import { normalizeSummaryRows, summaryInRange, summaryTotals, groupSummary } from "./lib/salesSummary.js";
 
-/* ---------------------------------------------------------
-   Admin session persistence: once unlocked, remember it in
-   sessionStorage (cleared when the browser tab/window closes,
-   unlike localStorage) so a page refresh doesn't ask for the
-   passcode again. A random token + expiry means a stale/tampered
-   value left over in storage can't unlock the app on its own —
-   it still has to match what tryUnlock() wrote. Note this is a
-   client-side UX gate only: the admin API endpoints themselves
-   don't check this token, the same as before.
---------------------------------------------------------- */
-const ADMIN_SESSION_KEY = "semis_admin_session";
-const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
-
-function readAdminSession() {
-  try {
-    const raw = sessionStorage.getItem(ADMIN_SESSION_KEY);
-    if (!raw) return null;
-    const session = JSON.parse(raw);
-    if (!session?.token || !session?.expiresAt || Date.now() > session.expiresAt) {
-      sessionStorage.removeItem(ADMIN_SESSION_KEY);
-      return null;
-    }
-    return session;
-  } catch {
-    return null;
-  }
-}
-
-function writeAdminSession() {
-  const token = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const session = { token, expiresAt: Date.now() + ADMIN_SESSION_TTL_MS };
-  try {
-    sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session));
-  } catch {}
-  return session;
-}
+import { formatIndiaDate, formatIndiaDateTime, indiaCalendarDateKey, indiaRangeBounds, indiaWeekLabel } from "./lib/dateTime.js";
+import ItemsManager from "./components/ItemsManager.jsx";
 
 /* ---------------------------------------------------------
    Admin dashboard (secret route /nashi)
 --------------------------------------------------------- */
 export default function Admin() {
-  const navigate = useNavigate();
-  const [unlocked, setUnlocked] = useState(() => !!readAdminSession());
+  const [unlocked, setUnlocked] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [loginPending, setLoginPending] = useState(false);
   const [code, setCode] = useState("");
-  const [error, setError] = useState(false);
+  const [error, setError] = useState("");
+  const [dashboardError, setDashboardError] = useState("");
   const [tab, setTab] = useState("pending");
-const [section, setSection] = useState("orders");
+  const [section, setSection] = useState("orders");
+  const [primaryNavOpen, setPrimaryNavOpen] = useState(false);
   const [invoiceGroup, setInvoiceGroup] = useState("recent"); // recent | day | week
   const [salesGroup, setSalesGroup] = useState("day"); // day | week
+  const [qrPreviewFailed, setQrPreviewFailed] = useState(false);
   // Flexible date-range filtering (all / day / week / month) applied to invoices & sales
   const [invRange, setInvRange] = useState("all");
-  const [invRefDate, setInvRefDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [invRefDate, setInvRefDate] = useState(() => indiaCalendarDateKey());
   const [invSearch, setInvSearch] = useState("");
   // Sub-tabs within the invoices & sales sections
   const [invSub, setInvSub] = useState("list"); // list | payments
-  const [salesSub, setSalesSub] = useState("stats"); // stats | payments
   // Payments sub-tab (paid / unpaid)
   const [payTab, setPayTab] = useState("unpaid"); // paid | unpaid
 
@@ -107,12 +89,20 @@ const [section, setSection] = useState("orders");
   const [menu, setMenu] = useState([]);
   const [orders, setOrders] = useState([]);
   const [archived, setArchived] = useState([]);
+  // Permanent daily sales totals (never reduced by bulk clean-up).
   const [salesSummary, setSalesSummary] = useState([]);
+  // Order ids whose payment toggle request is in flight (blocks double taps).
+  const paymentInFlightRef = useRef(new Set());
   const [priceDraft, setPriceDraft] = useState({});
   const [stockDraft, setStockDraft] = useState({});
+  const [invoiceBatchInfo, setInvoiceBatchInfo] = useState({ totalInvoices: 0, batchSize: 3, totalBatches: 0 });
+  const [downloadingBatch, setDownloadingBatch] = useState(null);
+  const [expandedOrders, setExpandedOrders] = useState({});
+  const [orderDrafts, setOrderDrafts] = useState({});
+  const [editedAcceptPending, setEditedAcceptPending] = useState({});
 
-  const refreshMenu = useCallback(async () => setMenu(await loadMenu()), []);
-  const refreshInventory = useCallback(async () => setInventory(await loadInventory()), []);
+  const refreshMenu = useCallback(async () => setMenu(await loadAdminMenu()), []);
+  const refreshInventory = useCallback(async () => setInventory(await loadAdminInventory()), []);
   // In-flight optimistic status overrides (orderId -> status). These are merged
   // into the fetched list so a stale server snapshot (captured while an accept/decline
   // request is still in flight) can't clobber the optimistic status back to pending.
@@ -123,36 +113,84 @@ const [section, setSection] = useState("orders");
     setOrders(fetched.map((o) => (O[o.id] ? { ...o, status: O[o.id] } : o)));
   }, []);
   const refreshArchived = useCallback(async () => setArchived(await fetchArchivedOrders()), []);
-  const refreshSales = useCallback(async () => setSalesSummary(await fetchSalesSummary()), []);
+  const refreshSales = useCallback(async () => setSalesSummary(normalizeSummaryRows(await fetchSalesSummary())), []);
+  const refreshBatchInfo = useCallback(async () => {
+    try {
+      setInvoiceBatchInfo(await fetchInvoiceBatchInfo());
+    } catch {
+      setInvoiceBatchInfo({ totalInvoices: 0, batchSize: 3, totalBatches: 0 });
+    }
+  }, []);
 
   useEffect(() => {
-    refreshMenu();
-    refreshArchived();
-    refreshInventory();
-    refreshOrders();
-    refreshSales();
-  }, [refreshMenu, refreshArchived, refreshInventory, refreshOrders, refreshSales]);
+    checkAdminSession()
+      .then(setUnlocked)
+      .catch((err) => setError(err.message || "Staff service is temporarily unavailable"))
+      .finally(() => setAuthChecking(false));
+    const lock = () => setUnlocked(false);
+    const showApiError = (event) => setDashboardError(event.detail?.message || "The request failed");
+    window.addEventListener("semis-admin-unauthorized", lock);
+    window.addEventListener("semis-api-error", showApiError);
+    return () => {
+      window.removeEventListener("semis-admin-unauthorized", lock);
+      window.removeEventListener("semis-api-error", showApiError);
+    };
+  }, []);
 
-  const refreshAll = () => {
-    refreshMenu();
-    refreshArchived();
-    refreshInventory();
-    refreshOrders();
-    refreshSales();
+  useEffect(() => {
+    const closePrimaryNav = (event) => {
+      if (event.key === "Escape") setPrimaryNavOpen(false);
+    };
+    window.addEventListener("keydown", closePrimaryNav);
+    return () => window.removeEventListener("keydown", closePrimaryNav);
+  }, []);
+
+  useEffect(() => {
+    if (!unlocked) return;
+    const timer = setTimeout(() => {
+      Promise.allSettled([
+        refreshMenu(), refreshArchived(), refreshInventory(),
+        refreshOrders(), refreshBatchInfo(), refreshSales(),
+      ]);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [unlocked, refreshMenu, refreshArchived, refreshInventory, refreshOrders, refreshBatchInfo, refreshSales]);
+
+  const refreshAll = async () => {
+    setDashboardError("");
+    await Promise.allSettled([
+      refreshMenu(), refreshArchived(), refreshInventory(),
+      refreshOrders(), refreshBatchInfo(), refreshSales(),
+    ]);
   };
 
-  const tryUnlock = () => {
-    if (code === ADMIN_CODE) {
-      writeAdminSession();
+  const tryUnlock = async () => {
+    if (!code || loginPending) return;
+    setLoginPending(true);
+    setError("");
+    try {
+      await adminLogin(code);
       setUnlocked(true);
-      setError(false);
-    } else {
-      setError(true);
+      setCode("");
+    } catch (err) {
+      setError(err.message || "Unable to sign in");
+    } finally {
+      setLoginPending(false);
+    }
+  };
+
+  const signOut = async () => {
+    try {
+      await adminLogout();
+    } finally {
+      setUnlocked(false);
+      setCode("");
     }
   };
 
   const setOrderStatus = async (id, status) => {
     const order = orders.find((o) => o.id === id);
+    let committed = false;
     // Register the in-flight override so a stale refresh can't clobber the
     // optimistic status back to pending while the request is in progress.
     orderStatusOverrideRef.current = { ...orderStatusOverrideRef.current, [id]: status };
@@ -160,20 +198,7 @@ const [section, setSection] = useState("orders");
     setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status } : o)));
     try {
       await updateOrderStatusApi(id, status);
-
-      // When accepting an order, decrement stock for each item. This uses an
-      // atomic server-side decrement (single UPDATE), so concurrent accepts
-      // from multiple admins never lose updates (no read-modify-write race).
-      if (status === "accepted" && order) {
-        for (const i of order.items || []) {
-          setInventory((prevInv) => {
-            const cur = prevInv[i.id];
-            if (!cur) return prevInv;
-            return { ...prevInv, [i.id]: { ...cur, stock: Math.max(0, (cur.stock || 0) - i.qty) } };
-          });
-          await decrementStockApi(i.id, i.qty);
-        }
-      }
+      committed = true;
 
       // Status change committed to the DB — drop the override so the next
       // refresh reflects authoritative server state, then re-sync to converge.
@@ -181,12 +206,94 @@ const [section, setSection] = useState("orders");
       delete O[id];
       orderStatusOverrideRef.current = O;
       await refreshOrders();
-    } catch (err) {
-      // Revert on failure
+      await refreshInventory();
+      await refreshBatchInfo();
+      if (status === "completed") await refreshSales();
+    } catch {
       const O = { ...orderStatusOverrideRef.current };
       delete O[id];
       orderStatusOverrideRef.current = O;
-      setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: order.status } : o)));
+      // Revert only when the mutation itself failed. If a later refresh failed,
+      // the server change is already authoritative and must remain visible.
+      if (!committed && order) {
+        setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: order.status } : o)));
+      }
+    }
+  };
+
+  const toggleOrderEditor = (order) => {
+    setExpandedOrders((current) => ({ ...current, [order.id]: !current[order.id] }));
+    setOrderDrafts((current) => current[order.id] ? current : {
+      ...current,
+      [order.id]: order.items.map((item) => ({
+        originalId: item.id, id: item.id, name: item.name, qty: item.qty, price: item.price, category: item.category,
+        included: true, swapOpen: false,
+      })),
+    });
+  };
+
+  const patchDraftLine = (orderId, index, updater) => {
+    setOrderDrafts((current) => {
+      const lines = [...(current[orderId] || [])];
+      if (!lines[index]) return current;
+      lines[index] = typeof updater === "function" ? updater(lines[index]) : { ...lines[index], ...updater };
+      return { ...current, [orderId]: lines };
+    });
+  };
+
+  const adjustDraftQty = (orderId, index, direction) => {
+    patchDraftLine(orderId, index, (line) => {
+      const selected = menu.find((item) => item.id === line.id);
+      const step = Number(selected?.step) || 1;
+      const minQty = Number(selected?.minQty) || 1;
+      const next = Math.round((Number(line.qty) + direction * step) * 1000) / 1000;
+      return { ...line, qty: Math.max(minQty, next) };
+    });
+  };
+
+  const swapDraftItem = (orderId, index, itemId) => {
+    const selected = menu.find((item) => item.id === itemId);
+    if (!selected) return;
+    patchDraftLine(orderId, index, (line) => ({
+      ...line,
+      id: selected.id,
+      name: selected.name,
+      price: selected.price,
+      qty: Number(selected.minQty) || 1,
+      swapOpen: false,
+    }));
+  };
+
+  const omitShortageItems = (order) => {
+    const shortageGroups = new Set((order.stockShortages || []).map((shortage) => shortage.stockGroupId));
+    setOrderDrafts((current) => ({
+      ...current,
+      [order.id]: (current[order.id] || []).map((line) => {
+        const selected = menu.find((item) => item.id === line.id);
+        const stockGroupId = selected?.stockGroupId || line.id;
+        return shortageGroups.has(stockGroupId) ? { ...line, included: false } : line;
+      }),
+    }));
+  };
+
+  const handleAcceptEditedOrder = async (order) => {
+    const draft = orderDrafts[order.id] || [];
+    const items = draft.filter((line) => line.included).map((line) => ({ id: line.id, qty: line.qty }));
+    if (!items.length || editedAcceptPending[order.id]) {
+      if (!items.length) setDashboardError("Include at least one item before accepting the order.");
+      return;
+    }
+    setDashboardError("");
+    setEditedAcceptPending((current) => ({ ...current, [order.id]: true }));
+    try {
+      await acceptEditedOrderApi(order.id, items);
+      setExpandedOrders((current) => ({ ...current, [order.id]: false }));
+      setOrderDrafts((current) => { const next = { ...current }; delete next[order.id]; return next; });
+      await Promise.allSettled([refreshOrders(), refreshInventory(), refreshBatchInfo()]);
+    } catch {
+      // parseApiResponse already surfaces the actionable server message in the admin error banner.
+    } finally {
+      setEditedAcceptPending((current) => ({ ...current, [order.id]: false }));
     }
   };
 
@@ -196,7 +303,10 @@ const [section, setSection] = useState("orders");
     const active = orders.find((o) => o.id === id);
     const arch = archived.find((o) => o.id === id);
     const order = active || arch;
-    if (!order) return;
+    // Ignore a second tap while this order's request is still in flight;
+    // otherwise a fast double tap would send "paid" then "unpaid".
+    if (!order || paymentInFlightRef.current.has(id)) return;
+    paymentInFlightRef.current.add(id);
     const prev = order.paymentStatus;
     const next = prev === "paid" ? "unpaid" : "paid";
 
@@ -210,10 +320,12 @@ const [section, setSection] = useState("orders");
 
     try {
       await updatePaymentStatusApi(id, next);
-    } catch (err) {
+    } catch {
       // Revert on failure
       setOrders((p) => p.map(revert));
       setArchived((p) => p.map(revert));
+    } finally {
+      paymentInFlightRef.current.delete(id);
     }
   };
 
@@ -224,7 +336,8 @@ const [section, setSection] = useState("orders");
     setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], available: !wasAvailable } }));
     try {
       await updateInventoryField(itemId, { available: !wasAvailable });
-    } catch (err) {
+      await Promise.all([refreshMenu(), refreshInventory()]);
+    } catch {
       setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], available: wasAvailable } }));
     }
   };
@@ -238,7 +351,7 @@ const [section, setSection] = useState("orders");
     setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], price } }));
     try {
       await updateInventoryField(itemId, { price });
-    } catch (err) {
+    } catch {
       setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], price: currentPriceOf(itemId) } }));
     }
     setPriceDraft((d) => {
@@ -249,27 +362,21 @@ const [section, setSection] = useState("orders");
   };
 
   const saveStock = async (itemId) => {
-    const raw = stockDraft[itemId];
+    const stockGroupId = inventory[itemId]?.stockGroupId || itemId;
+    const raw = stockDraft[stockGroupId];
     if (raw === undefined || raw === "") return;
     const stock = Number(raw);
     if (!Number.isInteger(stock) || stock < 0) return;
-    const previousItem = inventory[itemId];
-    // Determine availability: item is available only if stock > 0
-    const available = stock > 0;
-    // Optimistic local update for instant feedback
-    setInventory((prev) => ({ ...prev, [itemId]: { ...prev[itemId], stock, available } }));
     try {
-      await updateInventoryField(itemId, { stock, available });
+      await updateInventoryField(itemId, { stock });
+      await refreshInventory();
+      await refreshOrders();
     } catch {
-      // Revert on failure - restore previous stock and availability
-      setInventory((current) => ({
-        ...current,
-        [itemId]: previousItem,
-      }));
+      return;
     }
     setStockDraft((d) => {
       const copy = { ...d };
-      delete copy[itemId];
+      delete copy[stockGroupId];
       return copy;
     });
   };
@@ -285,27 +392,65 @@ const [section, setSection] = useState("orders");
     await refreshOrders();
   };
 
+  // Bulk clean-up of genuine, paid and synced sales. Daily sales totals are kept.
+  // Active and archived lists both refresh, since eligible orders can be in either.
+  const deletePaidSynced = async () => {
+    const deletedCount = await deletePaidSyncedOrdersApi();
+    alert(`Deleted ${deletedCount} invoice${deletedCount === 1 ? "" : "s"}.`);
+    await Promise.allSettled([refreshArchived(), refreshOrders()]);
+  };
+
+  // Permanently delete a single completed order that was recorded by mistake.
+  // The backend removes its amount from the daily sales total; stock is not restored.
+  const deleteCompletedOrder = async (order) => {
+    const confirmed = window.confirm(
+      `Delete this completed order because it was wrong?\n\n` +
+      `${order.customer.name} · ${order.id} · ${rupee(order.total)}\n\n` +
+      `This cannot be undone. The order is removed from Sales, its payment ` +
+      `record is deleted, and the customer's invoice link will stop working. ` +
+      `Stock is not changed.`
+    );
+    if (!confirmed) return;
+    // Optimistic removal for instant feedback
+    setOrders((prev) => prev.filter((o) => o.id !== order.id));
+    try {
+      await deleteCompletedOrderApi(order.id);
+      await refreshSales();
+    } catch {
+      // Revert if the server rejected the deletion
+      setOrders((prev) => {
+        // Only re-insert if it isn't already back (concurrent refresh)
+        if (prev.some((o) => o.id === order.id)) return prev;
+        return [order, ...prev];
+      });
+    }
+  };
+
+  if (authChecking) {
+    return <div className="min-h-screen bg-green-100 flex items-center justify-center text-green-800">Checking staff session...</div>;
+  }
+
   if (!unlocked) {
     return (
-      <div className="min-h-screen bg-green-100 flex items-center justify-center p-4" style={{ fontFamily: "'Work Sans', sans-serif" }}>
+      <div className="min-h-screen bg-green-100 flex items-center justify-center p-4" style={{ fontFamily: "var(--font-sans)" }}>
         <style>{FONTS}</style>
         <div className="w-full max-w-xs text-center">
           <div className="w-12 h-12 rounded-full bg-amber-400 flex items-center justify-center mx-auto mb-4">
             <Lock className="w-6 h-6 text-green-950" />
           </div>
-          <h1 className="text-green-950 text-lg font-semibold mb-1" style={{ fontFamily: "'Fraunces', serif" }}>Staff access</h1>
+          <h1 className="text-green-950 text-lg font-semibold mb-1" style={{ fontFamily: "var(--font-serif)" }}>Staff access</h1>
           <p className="text-green-800/70 text-sm mb-4">Enter the kitchen passcode to manage orders.</p>
           <input
             type="password"
             value={code}
-            onChange={(e) => { setCode(e.target.value); setError(false); }}
+            onChange={(e) => { setCode(e.target.value); setError(""); }}
             onKeyDown={(e) => e.key === "Enter" && tryUnlock()}
             className="w-full bg-white border border-green-300 rounded-lg px-3.5 py-2.5 text-sm text-green-950 text-center focus:outline-none focus:ring-2 focus:ring-amber-400 mb-2"
             placeholder="Passcode"
           />
-          {error && <p className="text-red-500 text-xs mb-2">Incorrect passcode.</p>}
-          <button onClick={tryUnlock} className="w-full py-2.5 rounded-lg bg-amber-400 text-green-950 font-semibold hover:bg-amber-300 transition-colors shadow-sm">
-            Unlock
+          {error && <p className="text-red-500 text-xs mb-2">{error}</p>}
+          <button disabled={loginPending} onClick={tryUnlock} className="w-full py-2.5 rounded-lg bg-amber-400 text-green-950 font-semibold hover:bg-amber-300 disabled:opacity-60 transition-colors shadow-sm">
+            {loginPending ? "Signing in..." : "Unlock"}
           </button>
         </div>
       </div>
@@ -322,40 +467,10 @@ const [section, setSection] = useState("orders");
   const allInvoiceOrders = [...archived, ...orders];
 
 /* ---------- Shared date-range helpers ---------- */
-  const fmtDate = (ts) =>
-    new Date(ts).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  const fmtDate = (ts) => formatIndiaDate(ts);
 
-  const weekLabel = (ts) => {
-    const start = new Date(ts);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    return `${fmtDate(start.getTime())} – ${fmtDate(end.getTime())}`;
-  };
-
-  // Compute the inclusive [start, end] timestamps for the selected range.
-  const rangeBounds = (range, ref) => {
-    const d = ref ? new Date(ref) : new Date();
-    d.setHours(12, 0, 0, 0); // midday to avoid TZ edge cases
-    const start = new Date(d);
-    const end = new Date(d);
-    if (range === "day") {
-      start.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
-    } else if (range === "week") {
-      // Monday-start week
-      const day = (d.getDay() + 6) % 7;
-      start.setDate(d.getDate() - day);
-      start.setHours(0, 0, 0, 0);
-      end.setDate(start.getDate() + 6);
-      end.setHours(23, 59, 59, 999);
-    } else if (range === "month") {
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
-      end.setMonth(d.getMonth() + 1, 0);
-      end.setHours(23, 59, 59, 999);
-    }
-    return { start: start.getTime(), end: end.getTime() };
-  };
+  const weekLabel = indiaWeekLabel;
+  const rangeBounds = indiaRangeBounds;
 
   const inRange = (o) => {
     if (invRange === "all") return true;
@@ -440,7 +555,7 @@ const [section, setSection] = useState("orders");
                     <Phone className="w-3 h-3" /> {o.customer.phone}
                     <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
                   </div>
-                  <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
+                  <div className="text-green-800/60 text-xs mt-0.5">Ordered: {formatIndiaDateTime(o.createdAt)}</div>
                   {(o.customer.deliveryDate || o.customer.deliverySlot) && (
                     <div className="text-amber-700 text-xs mt-0.5 font-medium">
                       Wants it: {deliveryDateLabel(o.customer.deliveryDate)}{o.customer.deliverySlot ? `, ${deliverySlotLabel(o.customer.deliverySlot)}` : ""}
@@ -492,68 +607,141 @@ const [section, setSection] = useState("orders");
     );
   };
 
+  const primarySections = [
+    { id: "orders", label: "Orders", index: "01" },
+    { id: "invoices", label: "Invoices", index: "02" },
+    { id: "items", label: "Items", index: "03" },
+    { id: "inventory", label: "Inventory", index: "04" },
+    { id: "sales", label: "Sales", index: "05" },
+  ];
+  const selectPrimarySection = (id) => {
+    setSection(id);
+    setPrimaryNavOpen(false);
+  };
+
   return (
-    <div className="min-h-screen bg-green-100 text-green-950" style={{ fontFamily: "'Work Sans', sans-serif" }}>
+    <div className="admin-dashboard-shell min-h-screen bg-green-100 text-green-950" style={{ fontFamily: "var(--font-sans)" }}>
       <style>{FONTS}</style>
-      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-green-200 shadow-sm">
-        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-          <Logo />
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-green-800/60 uppercase tracking-widest">Kitchen dashboard</span>
+
+      <aside
+        className={`admin-primary-nav ${primaryNavOpen ? "is-open" : ""}`}
+        aria-label="Admin sections"
+      >
+        <div className="admin-primary-nav__panel">
+          <div className="admin-primary-nav__heading">
+            <div>
+              <p className="admin-primary-nav__eyebrow">Kitchen dashboard</p>
+              <p className="admin-primary-nav__where">Where to?</p>
+            </div>
             <button
+              type="button"
+              className="admin-primary-nav__close"
+              onClick={() => setPrimaryNavOpen(false)}
+              aria-label="Close admin navigation"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <nav className="admin-primary-nav__links" aria-label="Primary admin navigation">
+            {primarySections.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                onClick={() => selectPrimarySection(item.id)}
+                className={`admin-primary-nav__item ${section === item.id ? "is-active" : ""}`}
+                aria-current={section === item.id ? "page" : undefined}
+              >
+                <span>{item.label}</span>
+                <span className="admin-primary-nav__index" aria-hidden="true">{item.index}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="admin-primary-nav__footer">
+            <button type="button" onClick={signOut} className="admin-primary-nav__signout">
+              <span>Sign out</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+            <p>Staff controls</p>
+          </div>
+        </div>
+      </aside>
+
+      <button
+        type="button"
+        className={`admin-primary-nav__backdrop ${primaryNavOpen ? "is-visible" : ""}`}
+        onClick={() => setPrimaryNavOpen(false)}
+        aria-label="Close admin navigation"
+        tabIndex={primaryNavOpen ? 0 : -1}
+      />
+
+      <div className="admin-dashboard-content min-h-screen flex flex-col">
+      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-green-200 shadow-sm">
+        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              type="button"
+              className="admin-primary-nav__trigger"
+              onClick={() => setPrimaryNavOpen(true)}
+              aria-expanded={primaryNavOpen}
+              aria-label="Open admin navigation"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="admin-header-logo min-w-0">
+              <Logo />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="hidden sm:inline text-xs text-green-800/60 uppercase tracking-widest">Kitchen dashboard</span>
+            <button
+              type="button"
               onClick={refreshAll}
               title="Refresh orders, inventory & sales"
-              className="text-[11px] px-2.5 py-1 rounded-full bg-green-100 border border-green-300 text-green-800 hover:text-amber-600"
+              aria-label="Refresh orders, inventory and sales"
+              className="admin-header-refresh"
             >
-              ↻ Refresh
-            </button>
-            <button
-              onClick={() => navigate("/")}
-              className="text-[11px] px-2.5 py-1 rounded-full bg-green-100 border border-green-300 text-green-800 hover:text-amber-600"
-            >
-              ← Back to site
+              <RefreshCw className="w-4 h-4" />
             </button>
           </div>
         </div>
-        <div className="max-w-5xl mx-auto px-4 flex gap-1">
-          {[
-            { id: "orders", label: "Orders" },
-            { id: "invoices", label: "Invoices" },
-            { id: "inventory", label: "Inventory" },
-            { id: "sales", label: "Sales" },
-          ].map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setSection(s.id)}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-                section === s.id ? "border-amber-400 text-amber-600" : "border-transparent text-green-800/60 hover:text-green-950"
-              }`}
-            >
-              {s.label}
-            </button>
-          ))}
-        </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-4 py-6">
+      <main className="w-full max-w-5xl mx-auto px-4 py-6 flex-1">
+        {dashboardError && (
+          <div className="mb-5 flex items-start justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <span>{dashboardError}</span>
+            <button onClick={() => setDashboardError("")} className="font-semibold" aria-label="Dismiss error">×</button>
+          </div>
+        )}
         {section === "orders" && (
           <>
-            <div className="flex gap-2 mb-5 overflow-x-auto">
-              {["pending", "accepted", "declined", "completed"].map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  className={`px-3.5 py-2 rounded-lg text-sm font-medium whitespace-nowrap border ${
-                    tab === t ? "bg-amber-400 text-green-950 border-amber-400" : "border-green-300 bg-white text-green-800"
-                  }`}
-                >
-                  {STATUS[t].label} ({counts[t]})
-                </button>
-              ))}
+            <div className="mb-5">
+              <div className={`admin-order-status-tabs is-${tab}`} role="tablist" aria-label="Order status">
+                {["pending", "accepted", "declined", "completed"].map((t) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === t}
+                    key={t}
+                    onClick={() => setTab(t)}
+                    className={`admin-order-status-tab status-${t} ${tab === t ? "is-active" : ""}`}
+                  >
+                    <span className="admin-order-status-tab__initial" aria-hidden="true">
+                      {STATUS[t].label.charAt(0)}
+                    </span>
+                    <span className="admin-order-status-tab__label">
+                      {STATUS[t].label}
+                    </span>
+                    <span className="admin-order-status-tab__count">({counts[t]})</span>
+                  </button>
+                ))}
+              </div>
               {(tab === "declined" || tab === "completed") && counts[tab] > 0 && (
                 <button
                   onClick={() => { if (confirm(`Move all ${counts[tab]} ${tab} order(s) to the archive for a fresh start?`)) clearTab(tab); }}
-                  className="px-3.5 py-2 rounded-lg text-sm font-semibold whitespace-nowrap border border-red-300 text-red-600 bg-red-50 hover:bg-red-100"
+                  className="admin-order-clear mt-2 px-3.5 py-2 rounded-lg text-sm font-semibold whitespace-nowrap border border-red-300 text-red-600 bg-red-50 hover:bg-red-100"
                 >
                   <Trash2 className="w-3.5 h-3.5 inline -mt-0.5 mr-1" />
                   Clear {STATUS[tab].label} ({counts[tab]})
@@ -575,6 +763,7 @@ const [section, setSection] = useState("orders");
                     <div>
                       <div className="font-mono text-xs text-green-800/50">{o.id}</div>
                       <div className="text-green-950 font-semibold">{o.customer.name}</div>
+                      <div className="text-green-800/60 text-xs mt-0.5">Ordered: {formatIndiaDateTime(o.createdAt)}</div>
                       <div className="flex items-center gap-1.5 text-green-800/70 text-xs mt-0.5">
                         <Phone className="w-3 h-3" /> {o.customer.phone}
                         <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
@@ -612,6 +801,17 @@ const [section, setSection] = useState("orders");
                       )}
                     </div>
                     <div className="flex gap-2 items-center">
+                      {o.status === "pending" && (
+                        <button
+                          type="button"
+                          onClick={() => toggleOrderEditor(o)}
+                          aria-expanded={Boolean(expandedOrders[o.id])}
+                          aria-label={expandedOrders[o.id] ? "Close order editing options" : "Open order editing options"}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-green-200 text-green-800 hover:bg-green-50"
+                        >
+                          <ChevronDown className={`h-4 w-4 transition-transform ${expandedOrders[o.id] ? "rotate-180" : ""}`} />
+                        </button>
+                      )}
                       <StatusPill status={o.status} />
                       {o.status === "accepted" && (
                         <button
@@ -626,20 +826,157 @@ const [section, setSection] = useState("orders");
                           {o.paymentStatus === "paid" ? "Paid" : "Not paid"}
                         </button>
                       )}
+                      {o.status === "declined" && (
+                        <button
+                          onClick={() => shareDeclineOnWhatsApp(o.customer.phone)}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                        >
+                          <Share2 className="w-3.5 h-3.5" /> Notify on WhatsApp
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="border-t border-green-100 pt-3 space-y-1">
                     {o.items.map((i) => (
-                      <div key={i.id} className="flex justify-between text-sm text-green-900">
-                        <span>{i.name} × {i.qty}</span>
+                      <div key={i.id} className="flex items-center justify-between gap-2 text-sm text-green-900">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <span>{i.name} × {i.qty}</span>
+                          <SnackTypeBadge category={i.category} />
+                        </span>
                         <span>{rupee(i.price * i.qty)}</span>
                       </div>
                     ))}
                   </div>
+                  {o.status === "pending" && expandedOrders[o.id] && (() => {
+                    const draft = orderDrafts[o.id] || [];
+                    const editableMenu = menu.filter((item) => item.available && !item.isDraft);
+                    // Group swap choices by menu category (Fried, Frozen, Mains), keeping menu order within each.
+                    const knownCats = new Set(CATS.map((cat) => cat.id));
+                    const swapGroups = [
+                      ...CATS.map((cat) => ({ id: cat.id, name: cat.name, items: editableMenu.filter((item) => item.cat === cat.id) })),
+                      { id: "other", name: "Other", items: editableMenu.filter((item) => !knownCats.has(item.cat)) },
+                    ].filter((group) => group.items.length > 0);
+                    const included = draft.filter((line) => line.included);
+                    const editedTotal = included.reduce((sum, line) => sum + Number(line.qty) * Number(line.price), 0);
+                    return (
+                      <section className="mt-3 rounded-xl border border-green-200 bg-green-50/60 p-3" aria-label="Edit pending order">
+                        <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
+                          <div>
+                            <h3 className="text-sm font-semibold text-green-950">Order options</h3>
+                            <p className="text-xs text-green-800/70">Omit unavailable lines, change quantities, or swap an item before accepting.</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {o.stockShortages?.length > 0 && (
+                              <button type="button" onClick={() => omitShortageItems(o)} className="rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100">
+                                Omit shortage items
+                              </button>
+                            )}
+                            <div className="text-right text-xs text-green-800/70">
+                              <div>Included total</div>
+                              <div className="text-sm font-semibold text-amber-600">{rupee(editedTotal)}</div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          {draft.map((line, index) => {
+                            const selected = menu.find((item) => item.id === line.id);
+                            const step = Number(selected?.step) || 1;
+                            const minQty = Number(selected?.minQty) || 1;
+                            return (
+                              <div key={`${line.originalId}-${index}`} className={`rounded-lg border p-2.5 ${line.included ? "border-green-200 bg-white" : "border-stone-200 bg-stone-50 opacity-70"}`}>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex min-w-0 items-center gap-1.5">
+                                      <span className="truncate text-sm font-medium text-green-950">{line.name}</span>
+                                      <SnackTypeBadge category={selected?.cat ?? line.category} />
+                                    </div>
+                                    <div className="text-xs text-green-800/60">{rupee(Number(line.price))} each · {rupee(Number(line.price) * Number(line.qty))}</div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => patchDraftLine(o.id, index, (current) => ({ ...current, included: !current.included }))}
+                                      className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-xs font-medium ${line.included ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-stone-300 bg-white text-stone-600"}`}
+                                    >
+                                      {line.included ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
+                                      {line.included ? "Include" : "Omit"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => patchDraftLine(o.id, index, (current) => ({ ...current, swapOpen: !current.swapOpen }))}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-green-300 bg-white px-2 py-1.5 text-xs font-medium text-green-800 hover:bg-green-50"
+                                    >
+                                      <ArrowLeftRight className="h-3.5 w-3.5" /> Swap
+                                    </button>
+                                  </div>
+                                </div>
+                                {line.swapOpen && (
+                                  <select
+                                    value={line.id}
+                                    onChange={(event) => swapDraftItem(o.id, index, event.target.value)}
+                                    className="mt-2 w-full rounded-lg border border-green-200 bg-white px-2.5 py-2 text-sm text-green-950 focus:outline-none focus:ring-2 focus:ring-amber-300"
+                                  >
+                                    {swapGroups.map((group) => (
+                                      <optgroup key={group.id} label={group.name}>
+                                        {group.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                                      </optgroup>
+                                    ))}
+                                  </select>
+                                )}
+                                <div className="mt-2 flex items-center justify-between gap-3">
+                                  <span className="text-xs text-green-800/60">Quantity {selected?.unit ? `· ${selected.unit}` : ""}</span>
+                                  <div className="flex items-center gap-2">
+                                    <button type="button" onClick={() => adjustDraftQty(o.id, index, -1)} disabled={Number(line.qty) <= minQty} className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-green-200 bg-white text-green-800 disabled:opacity-40"><Minus className="h-3.5 w-3.5" /></button>
+                                    <span className="min-w-10 text-center text-sm font-semibold text-green-950">{line.qty}</span>
+                                    <button type="button" onClick={() => adjustDraftQty(o.id, index, 1)} className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-green-200 bg-white text-green-800"><Plus className="h-3.5 w-3.5" /></button>
+                                    {step !== 1 && <span className="text-[10px] text-green-800/50">step {step}</span>}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-green-200 pt-3">
+                          <p className="max-w-md text-xs text-green-800/60">This action saves the included lines and accepts them atomically. If stock changed meanwhile, nothing is changed and you can adjust again.</p>
+                          <button
+                            type="button"
+                            onClick={() => handleAcceptEditedOrder(o)}
+                            disabled={!included.length || editedAcceptPending[o.id]}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-green-800 px-3 py-2 text-sm font-semibold text-white hover:bg-green-900 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Check className="h-4 w-4" /> {editedAcceptPending[o.id] ? "Accepting…" : "Accept included items"}
+                          </button>
+                        </div>
+                      </section>
+                    );
+                  })()}
+                  {o.status === "pending" && o.stockShortages?.length > 0 && (
+                    <section aria-label="Stock shortages" className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                      <h3 className="font-semibold">Production needed</h3>
+                      {o.stockShortages.map(s => (
+                        <div key={s.stockGroupId} className="mt-2 break-words">
+                          <div className="font-medium">{s.name}</div>
+                          <div>Available: {s.available} · Required: {s.required} · Shortage: {s.shortage}</div>
+                        </div>
+                      ))}
+                      <p className="mt-2">Prepare the remaining items or decline the order. Fried/frozen variants share stock.</p>
+                      <p className="mt-1 text-xs">Based on current stock for this order only; other pending orders do not reserve stock. Refresh to check the latest counts.</p>
+                    </section>
+                  )}
                   {o.customer.notes && <div className="text-xs text-green-800/50 italic mt-2 break-all">Note: {o.customer.notes}</div>}
-                  <div className="flex justify-between items-center mt-3 pt-3 border-t border-green-100">
+                  <div className="flex flex-wrap gap-3 justify-between items-center mt-3 pt-3 border-t border-green-100">
                     <span className="font-semibold text-amber-600">{rupee(o.total)}</span>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      {(o.status === "accepted" || o.status === "completed") && (
+                        <button
+                          onClick={() => shareInvoiceOnWhatsApp(o.id, o.customer.phone, o.invoiceShareToken)}
+                          disabled={!o.invoiceShareToken}
+                          title={!o.invoiceShareToken ? "Invoice sharing token unavailable" : undefined}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          <Share2 className="w-3.5 h-3.5" /> Share on WhatsApp
+                        </button>
+                      )}
                       {o.status === "pending" && (
                         <>
                           <button
@@ -652,9 +989,21 @@ const [section, setSection] = useState("orders");
                             onClick={() => setOrderStatus(o.id, "accepted")}
                             className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-amber-400 text-green-950 hover:bg-amber-300"
                           >
-                            <Check className="w-3.5 h-3.5" /> Accept
+                            <Check className="w-3.5 h-3.5" /> {expandedOrders[o.id] ? "Accept full order" : "Accept"}
                           </button>
                         </>
+                      )}
+                      {o.status === "accepted" && (
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Decline this accepted order because it was wrong?\n\n${o.customer.name} · ${o.id} · ${rupee(o.total)}\n\nAny fried/frozen stock deducted for it is put back. It is not counted in Sales.`)) {
+                              setOrderStatus(o.id, "declined");
+                            }
+                          }}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-red-300 text-red-600 hover:bg-red-50"
+                        >
+                          <X className="w-3.5 h-3.5" /> Decline
+                        </button>
                       )}
                       {o.status === "accepted" && (
                         <button
@@ -662,6 +1011,15 @@ const [section, setSection] = useState("orders");
                           className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-sky-100 text-sky-700 hover:bg-sky-200"
                         >
                           <Package className="w-3.5 h-3.5" /> Mark completed
+                        </button>
+                      )}
+                      {o.status === "completed" && (
+                        <button
+                          onClick={() => deleteCompletedOrder(o)}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-red-300 text-red-600 bg-red-50 hover:bg-red-100"
+                          title="Permanently delete this completed order"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" /> Delete
                         </button>
                       )}
                     </div>
@@ -688,8 +1046,7 @@ const [section, setSection] = useState("orders");
           // Group by day (calendar date)
           const byDay = new Map();
           searched.forEach((o) => {
-            const d = new Date(o.createdAt);
-            const key = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+            const key = indiaRangeBounds('day', o.createdAt).start;
             if (!byDay.has(key)) byDay.set(key, []);
             byDay.get(key).push(o);
           });
@@ -698,23 +1055,11 @@ const [section, setSection] = useState("orders");
           // Group by week (Mon-Sun)
           const byWeek = new Map();
           searched.forEach((o) => {
-            const d = new Date(o.createdAt);
-            const day = (d.getDay() + 6) % 7; // Mon=0 ... Sun=6
-            const weekStart = new Date(d);
-            weekStart.setDate(d.getDate() - day);
-            weekStart.setHours(0, 0, 0, 0);
-            const key = weekStart.getTime();
+            const key = indiaRangeBounds('week', o.createdAt).start;
             if (!byWeek.has(key)) byWeek.set(key, []);
             byWeek.get(key).push(o);
           });
           const weeks = Array.from(byWeek.entries()).sort((a, b) => b[0] - a[0]);
-
-const weekLabel = (ts) => {
-            const start = new Date(ts);
-            const end = new Date(start);
-            end.setDate(start.getDate() + 6);
-            return `${fmtDate(start.getTime())} – ${fmtDate(end.getTime())}`;
-          };
 
 // Default view: flat list of all invoices sorted newest-first.
           // Toggling "By day"/"By week" groups them; toggling the active one
@@ -730,7 +1075,7 @@ const weekLabel = (ts) => {
             <div>
               <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <div>
-                  <h2 className="text-green-950 text-lg font-semibold" style={{ fontFamily: "'Fraunces', serif" }}>Invoices</h2>
+                  <h2 className="text-green-950 text-lg font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Invoices</h2>
 <p className="text-green-800/50 text-xs mt-0.5">
                     {searched.length} accepted or completed {searched.length === 1 ? "order" : "orders"} &middot; {invoiceGroup === "day" ? "grouped by day" : invoiceGroup === "week" ? "grouped by week" : "newest first"}
                   </p>
@@ -753,20 +1098,38 @@ const weekLabel = (ts) => {
                       </button>
                     ))}
                   </div>
-                  {/* Invoice actions: download all accepted PDFs + sync to Google Sheets */}
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => downloadAllInvoices()}
-                      title="Download a ZIP of one PDF per accepted order"
-                      className="px-3.5 py-2 rounded-lg text-sm font-semibold border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
-                    >
-                      <Download className="w-3.5 h-3.5 inline -mt-0.5 mr-1" /> Download all
-                    </button>
+                  {/* Storage-free invoice batches + Google Sheets sync */}
+                  <div className="flex flex-wrap gap-2">
+                    {invoiceBatchInfo.totalBatches === 0 ? (
+                      <span className="px-3.5 py-2 rounded-lg text-sm border border-green-200 bg-white text-green-800/50">
+                        No accepted invoice batches
+                      </span>
+                    ) : Array.from({ length: invoiceBatchInfo.totalBatches }, (_, index) => index + 1).map((page) => (
+                      <button
+                        key={page}
+                        disabled={downloadingBatch !== null}
+                        onClick={async () => {
+                          setDownloadingBatch(page);
+                          try {
+                            await downloadInvoiceBatch(page);
+                          } catch (err) {
+                            alert(err.message || "Invoice batch download failed.");
+                          } finally {
+                            setDownloadingBatch(null);
+                          }
+                        }}
+                        title={`Download up to ${invoiceBatchInfo.batchSize} accepted invoices`}
+                        className="px-3.5 py-2 rounded-lg text-sm font-semibold border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        <Download className="w-3.5 h-3.5 inline -mt-0.5 mr-1" />
+                        {downloadingBatch === page ? "Preparing..." : `Batch ${page} of ${invoiceBatchInfo.totalBatches}`}
+                      </button>
+                    ))}
                     <button
                       onClick={async () => {
                         try {
-                          const { appended } = await syncToSheets();
-                          alert(`Synced ${appended} row(s) to Google Sheets.`);
+                          const { appended, alreadyPresent = 0 } = await syncToSheets();
+                          alert(`Added ${appended} new order(s) to Google Sheets.${alreadyPresent ? ` ${alreadyPresent} already existed and were not duplicated.` : ""}`);
                         } catch (err) {
                           alert(err.message || "Sync to Google Sheets failed.");
                         }
@@ -786,13 +1149,11 @@ const weekLabel = (ts) => {
                           onClick={async () => {
                             if (
                               !confirm(
-                                `Permanently delete ${eligible.length} paid & synced invoice${eligible.length === 1 ? "" : "s"} from the database?\n\nThese are already recorded in your Google Sheet — this only frees up database storage, it doesn't touch the sheet.`
+                                `Permanently delete ${eligible.length} paid & synced invoice${eligible.length === 1 ? "" : "s"} from the database?\n\nThese are already recorded in your Google Sheet — this only frees up database storage, it doesn't touch the sheet. Sales totals are kept. Customers' invoice links for these orders will stop working.`
                               )
                             )
                               return;
-                            const deletedCount = await deletePaidSyncedOrdersApi();
-                            alert(`Deleted ${deletedCount} invoice${deletedCount === 1 ? "" : "s"}.`);
-                            refreshArchived();
+                            await deletePaidSynced();
                           }}
                           title="Permanently delete paid, already-synced invoices to free up database storage"
                           className="px-3.5 py-2 rounded-lg text-sm font-semibold border border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
@@ -859,7 +1220,7 @@ const weekLabel = (ts) => {
                                 <Phone className="w-3 h-3" /> {o.customer.phone}
                                 <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
                               </div>
-                              <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
+                              <div className="text-green-800/60 text-xs mt-0.5">Ordered: {formatIndiaDateTime(o.createdAt)}</div>
                             </div>
                             <div className="text-right">
                               <StatusPill status={o.status} />
@@ -876,7 +1237,7 @@ const weekLabel = (ts) => {
                           </div>
                           <div className="flex flex-wrap justify-end gap-2 mt-3 pt-3 border-t border-green-100">
                             <button
-                              onClick={() => shareInvoiceOnWhatsApp(o.id, o.customer.phone)}
+                              onClick={() => shareInvoiceOnWhatsApp(o.id, o.customer.phone, o.invoiceShareToken)}
                               className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-green-300 text-green-800 hover:bg-green-50"
                             >
                               <Share2 className="w-3.5 h-3.5" /> Share on WhatsApp
@@ -915,7 +1276,7 @@ const weekLabel = (ts) => {
                                         <Phone className="w-3 h-3" /> {o.customer.phone}
                                         <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 text-green-800">{o.customer.mode}</span>
                                       </div>
-                                      <div className="text-green-800/60 text-xs mt-0.5">{fmtDate(o.createdAt)}</div>
+                                      <div className="text-green-800/60 text-xs mt-0.5">Ordered: {formatIndiaDateTime(o.createdAt)}</div>
                                     </div>
                                     <div className="text-right">
                                       <StatusPill status={o.status} />
@@ -932,7 +1293,7 @@ const weekLabel = (ts) => {
                                   </div>
                                   <div className="flex flex-wrap justify-end gap-2 mt-3 pt-3 border-t border-green-100">
                                     <button
-                                      onClick={() => shareInvoiceOnWhatsApp(o.id, o.customer.phone)}
+                                      onClick={() => shareInvoiceOnWhatsApp(o.id, o.customer.phone, o.invoiceShareToken)}
                                       className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium border border-green-300 text-green-800 hover:bg-green-50"
                                     >
                                       <Share2 className="w-3.5 h-3.5" /> Share on WhatsApp
@@ -958,6 +1319,11 @@ const weekLabel = (ts) => {
           );
         })()}
 
+
+        {section === "items" && (
+          <ItemsManager onChanged={refreshAll} onGoToInventory={() => selectPrimarySection("inventory")} />
+        )}
+
         {section === "inventory" && (
           <div className="space-y-6">
             {CATS.map((c) => (
@@ -966,23 +1332,28 @@ const weekLabel = (ts) => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {menu.filter((m) => m.cat === c.id).map((item) => {
                     const available = inventory[item.id]?.available !== false;
+                    const isDraft = inventory[item.id]?.isDraft === true || item.isDraft === true;
                     const currentPrice = inventory[item.id]?.price ?? item.price;
                     const priceD = priceDraft[item.id];
-                    const stockD = stockDraft[item.id];
+                    const stockGroupId = inventory[item.id]?.stockGroupId || item.id;
+                    const stockD = stockDraft[stockGroupId];
                     return (
-                      <div key={item.id} className="border border-green-200 bg-white rounded-lg px-3.5 py-2.5 shadow-sm">
+                      <div key={item.id} data-testid={`inventory-${item.id}`} className="border border-green-200 bg-white rounded-lg px-3.5 py-2.5 shadow-sm">
                         <div className="flex items-center justify-between gap-2 mb-2">
                           <div>
-                            <div className="text-sm text-green-950">{item.name}</div>
+                            <h3 className="text-sm text-green-950">{item.name}</h3>
                             <div className="text-xs text-green-800/50">{item.unit}</div>
+                            {isDraft && <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Draft</span>}
                           </div>
                           <button
                             onClick={() => toggleAvailability(item.id)}
+                            disabled={isDraft && (!(Number(currentPrice) > 0) || available)}
+                            aria-label={isDraft ? "Enable item" : undefined}
                             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors shrink-0 ${
                               available ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-600"
-                            }`}
+                            } disabled:cursor-not-allowed disabled:opacity-40`}
                           >
-                            {available ? "In stock" : "Sold out"}
+                            {isDraft ? "Enable item" : available ? "Production available" : "Production paused"}
                           </button>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
@@ -1001,21 +1372,22 @@ const weekLabel = (ts) => {
                             <button
                               onClick={() => savePrice(item.id)}
                               disabled={priceD === undefined || priceD === ""}
+                              aria-label="Save price"
                               className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-semibold bg-green-100 text-green-800 hover:bg-green-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                               title="Save price"
                             >
                               <Save className="w-3 h-3" />
                             </button>
                           </div>
-                          <div className="flex items-center gap-1">
-                            <span className="text-xs text-green-800/60">Stock</span>
+                          {item.cat !== "mains" && <div className="flex items-center gap-1">
+                            <span className="text-xs text-green-800/60">Shared stock</span>
                             <input
                               type="number"
                               min="0"
                               step="1"
                               placeholder="Stock"
-                              value={stockD ?? inventory[item.id]?.stock ?? 0}
-                              onChange={(e) => setStockDraft((d) => ({ ...d, [item.id]: e.target.value }))}
+                              value={stockD ?? Math.floor(Number(inventory[item.id]?.stock ?? 0))}
+                              onChange={(e) => { if (/^\d*$/.test(e.target.value)) setStockDraft((d) => ({ ...d, [stockGroupId]: e.target.value })); }}
                               onKeyDown={(e) => { if (e.key === "Enter") saveStock(item.id); }}
                               className="w-20 bg-green-50 border border-green-300 rounded-lg px-2 py-1.5 text-sm text-green-950 focus:outline-none focus:ring-2 focus:ring-amber-400"
                             />
@@ -1027,7 +1399,7 @@ const weekLabel = (ts) => {
                             >
                               <Save className="w-3 h-3" />
                             </button>
-                          </div>
+                          </div>}
                         </div>
                       </div>
                     );
@@ -1036,7 +1408,7 @@ const weekLabel = (ts) => {
               </div>
             ))}
             <p className="text-xs text-green-800/50">
-              Stock decrements automatically when an order is accepted. Price is the selling price.
+              Stock is a production count shared by matching fried and frozen snacks. Accepting an order deducts its fried/frozen quantities (never below zero); declining an accepted order puts the deducted amount back. Prices remain separate for each item.
             </p>
           </div>
         )}
@@ -1060,30 +1432,16 @@ const weekLabel = (ts) => {
             });
           });
 
-const periodRevenue = sold.reduce((s, o) => s + (o.total || 0), 0);
+          // Orders and revenue come from the permanent daily totals, so deleting
+          // old paid + synced orders never shrinks reported sales.
+          const summaryRows = summaryInRange(salesSummary, invRange, invRefDate);
+          const { orders: periodOrders, revenue: periodRevenue } = summaryTotals(summaryRows);
           const topItems = Object.entries(itemQty)
             .sort((a, b) => b[1] - a[1])
             .slice(0, 10);
 
-          // Group sold orders by day or by week for the breakdown panel.
-          const groupSold = (o) => {
-            const d = new Date(o.createdAt);
-            if (salesGroup === "week") {
-              const day = (d.getDay() + 6) % 7; // Mon=0 ... Sun=6
-              const weekStart = new Date(d);
-              weekStart.setDate(d.getDate() - day);
-              weekStart.setHours(0, 0, 0, 0);
-              return weekStart.getTime();
-            }
-            return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-          };
-          const byPeriod = new Map();
-          sold.forEach((o) => {
-            const key = groupSold(o);
-            if (!byPeriod.has(key)) byPeriod.set(key, []);
-            byPeriod.get(key).push(o);
-          });
-const periods = Array.from(byPeriod.entries()).sort((a, b) => b[0] - a[0]);
+          // Group the daily totals by day or by week for the breakdown panel.
+          const periods = groupSummary(summaryRows, salesGroup);
           const periodLabel = (key) => (salesGroup === "day" ? fmtDate(key) : weekLabel(key));
 
           const statCard = (label, value, sub) => (
@@ -1098,7 +1456,7 @@ const periods = Array.from(byPeriod.entries()).sort((a, b) => b[0] - a[0]);
             <div>
               <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
                 <div>
-                  <h2 className="text-green-950 text-lg font-semibold" style={{ fontFamily: "'Fraunces', serif" }}>Sales</h2>
+                  <h2 className="text-green-950 text-lg font-semibold" style={{ fontFamily: "var(--font-serif)" }}>Sales</h2>
 <p className="text-green-800/50 text-xs mt-0.5">
                     Based on completed orders &middot; {rangeLabel}
                   </p>
@@ -1124,12 +1482,25 @@ const periods = Array.from(byPeriod.entries()).sort((a, b) => b[0] - a[0]);
                 </div>
               </div>
 
+              <section className="bg-white border border-green-200 rounded-xl p-4 mb-6 shadow-sm" aria-label="Payment QR preview">
+                <h3 className="text-green-950 font-semibold">Current payment QR — read-only</h3>
+                <p className="text-green-800 text-sm mt-1 mb-3">This is the QR linked in customer WhatsApp messages. Staff cannot change it.</p>
+                {qrPreviewFailed ? (
+                  <p role="alert" className="text-red-700 text-sm">QR preview could not load. Refresh the page to try again; verify payment details before sharing.</p>
+                ) : (
+                  <img src={PAYMENT_QR_PATH} alt="Current payment QR" className="w-full max-w-64 h-auto rounded-lg" onError={() => setQrPreviewFailed(true)} />
+                )}
+              </section>
+
 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-                    {statCard("Orders", sold.length)}
+                    {statCard("Orders", periodOrders)}
                     {statCard("Revenue", rupee(periodRevenue))}
                     {statCard("Paid", rupee(sold.filter((o) => o.paymentStatus === "paid").reduce((s, o) => s + (o.total || 0), 0)))}
                     {statCard("Unpaid", rupee(sold.filter((o) => o.paymentStatus !== "paid").reduce((s, o) => s + (o.total || 0), 0)))}
                   </div>
+                  <p className="-mt-4 mb-6 text-xs text-green-800/60">
+                    Orders and revenue are permanent daily totals. Paid, unpaid and items sold include only completed orders not yet deleted.
+                  </p>
 
                   <div className="bg-white border border-green-200 rounded-xl p-4 shadow-sm">
                     <h3 className="text-amber-600 text-sm uppercase tracking-widest mb-3">Items sold ({rangeLabel})</h3>
@@ -1150,13 +1521,12 @@ const periods = Array.from(byPeriod.entries()).sort((a, b) => b[0] - a[0]);
                     </h3>
                     {periods.length === 0 && <p className="text-green-800/50 text-sm">No completed orders in this range.</p>}
                     <div className="space-y-3">
-                      {periods.map(([key, list]) => {
-                        const periodRevenue = list.reduce((s, o) => s + (o.total || 0), 0);
+                      {periods.map(([key, totals]) => {
                         return (
                           <div key={key} className="border-b border-green-100 pb-2 last:border-0">
                             <div className="flex items-center justify-between text-sm">
 <span className="text-green-950">{periodLabel(key)}</span>
-<span className="text-green-800/70">{list.length} {list.length === 1 ? "order" : "orders"} · {rupee(periodRevenue)}</span>
+<span className="text-green-800/70">{totals.orders} {totals.orders === 1 ? "order" : "orders"} · {rupee(totals.revenue)}</span>
                             </div>
                           </div>
                         );
@@ -1167,6 +1537,7 @@ const periods = Array.from(byPeriod.entries()).sort((a, b) => b[0] - a[0]);
           );
         })()}
       </main>
+      </div>
     </div>
   );
 }

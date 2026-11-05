@@ -13,50 +13,55 @@ exports.getInventory = async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Unable to load inventory",
     });
   }
 };
 
 exports.updateInventory = async (req, res) => {
   try {
+    const body = req.body;
+    const allowed = new Set(["stock", "available", "price"]);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return res.status(400).json({ success: false, message: "Inventory update must be an object" });
+    }
+    const fields = Object.keys(body);
+    if (fields.length === 0 || fields.some((field) => !allowed.has(field))) {
+      return res.status(400).json({ success: false, message: "Only stock, available, and price can be updated" });
+    }
+    if (Object.hasOwn(body, "stock") && (!Number.isInteger(body.stock) || body.stock < 0 || body.stock > 1000000)) {
+      return res.status(400).json({ success: false, message: "Stock must be a non-negative whole number" });
+    }
+    if (Object.hasOwn(body, "price") && (!Number.isFinite(body.price) || body.price < 0 || body.price > 10000000)) {
+      return res.status(400).json({ success: false, message: "Price must be a non-negative number" });
+    }
+    if (Object.hasOwn(body, "available") && typeof body.available !== "boolean") {
+      return res.status(400).json({ success: false, message: "Availability must be true or false" });
+    }
     const data = await inventory.updateInventory(
       req.params.id,
-      req.body
+      body
     );
+
+    if (!data) return res.status(404).json({ success: false, message: "Inventory item not found" });
 
     res.json({
       success: true,
       data,
     });
   } catch (err) {
+    if (err.publicMessage) return res.status(err.status || 400).json({ success: false, message: err.publicMessage });
     console.error(err);
 
     res.status(500).json({
       success: false,
-      message: err.message,
+      message: "Unable to update inventory",
     });
   }
 };
 
-// Atomic stock decrement (used when an order is accepted). Concurrency-safe:
-// the decrement happens in a single DB UPDATE, so simultaneous accepts from
-// multiple admins never lose updates.
-exports.decrementStock = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { qty } = req.body;
-    const amount = Math.max(0, Number(qty) || 0);
-
-    const data = await inventory.decrementStock(id, amount);
-
-    if (!data) {
-      return res.status(404).json({ success: false, message: "Inventory item not found" });
-    }
-
-    res.json({ success: true, data });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: err.message });
-  }
+exports.getAdminInventory = async (req, res, next) => {
+  res.set("Cache-Control", "private, no-store");
+  try { res.json({ success: true, data: await inventory.getInventory(true) }); }
+  catch (error) { next(error); }
 };
