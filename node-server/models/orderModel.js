@@ -9,7 +9,7 @@ const ORDER_SELECT = `
     c.name AS customer_name, c.phone AS customer_phone, c.address AS customer_address,
     c.latitude, c.longitude,
     COALESCE(json_agg(json_build_object('id', oi.menu_item_id, 'name', oi.item_name_snapshot,
-      'qty', oi.quantity, 'price', oi.unit_price))
+      'qty', oi.quantity, 'price', oi.unit_price, 'category', mi.category_id))
       FILTER (WHERE oi.id IS NOT NULL), '[]') AS items
   FROM orders o
   JOIN customers c ON c.id = o.customer_id
@@ -460,9 +460,14 @@ async function updateOrderStatus(id, status) {
   }
 }
 
+// Payment is only meaningful once the kitchen has accepted the order.
 async function updatePaymentStatus(id, paymentStatus) {
-  const row = (await db.query(`UPDATE orders SET payment_status=$1 WHERE id=$2 RETURNING *`, [paymentStatus, id])).rows[0];
-  return row ? publicOrderRow(row) : row;
+  const row = (await db.query(`UPDATE orders SET payment_status=$1
+    WHERE id=$2 AND status IN ('accepted', 'completed') RETURNING *`, [paymentStatus, id])).rows[0];
+  if (row) return publicOrderRow(row);
+  const exists = (await db.query(`SELECT status FROM orders WHERE id=$1`, [id])).rows[0];
+  if (exists) throw orderError(`Payment cannot be recorded while the order is ${exists.status}`, "INVALID_STATUS_TRANSITION");
+  return null;
 }
 
 async function deleteUnreferencedCustomers(client, customerIds) {
@@ -499,15 +504,14 @@ async function deleteCompletedOrder(id) {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+    // This action is for an order that was completed by mistake, so it is
+    // also removed from the permanent daily sales total. Stock is left as is
+    // (the food is assumed to have been made). Bulk clean-up of genuine sales
+    // uses deletePaidSyncedOrders, which keeps the daily totals.
     // Lock the row to prevent a race with concurrent status changes.
-    // The guard (status = 'completed' AND stock_reserved = false) mirrors
-    // the requested SQL:
-    //   DELETE FROM orders WHERE id = $1 AND stock_reserved = false
-    // An order reaches 'completed' only via updateOrderStatus which
-    // already sets stock_reserved = false, so the two guards are
-    // equivalent in practice. Both are kept here for defence-in-depth.
     const found = await client.query(
-      `SELECT id, customer_id, status, stock_reserved
+      `SELECT id, customer_id, status, stock_reserved, total,
+              ((created_at AT TIME ZONE 'Asia/Kolkata')::date)::text AS summary_date
          FROM orders WHERE id = $1 FOR UPDATE`,
       [id]
     );
@@ -521,6 +525,15 @@ async function deleteCompletedOrder(id) {
       await client.query("ROLLBACK");
       return { deleted: false, reason: "stock_reserved" };
     }
+    // Same date expression used when the order was counted on completion.
+    // GREATEST guards rows stored before the IST date correction.
+    await client.query(
+      `UPDATE sales_summary SET
+         orders_count = GREATEST(orders_count - 1, 0),
+         revenue = GREATEST(revenue - $2, 0)
+       WHERE summary_date = $1::date`,
+      [row.summary_date, row.total]
+    );
     await client.query(
       `DELETE FROM orders WHERE id = $1 AND stock_reserved = false`,
       [id]

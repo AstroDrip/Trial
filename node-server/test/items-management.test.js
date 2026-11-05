@@ -78,7 +78,8 @@ test('renames preserve original names in order lists, replay, PDF query and Shee
   assert.equal((await fixture.query(queries.SINGLE_ORDER_QUERY, [placed.id, null])).rows[0].item_name, 'New test snack');
   await fixture.query("UPDATE orders SET status='accepted' WHERE id=$1", [placed.id]);
   assert.equal((await fixture.query(queries.ACCEPTED_ORDERS_QUERY, [100, 0])).rows.find(row => row.order_id === placed.id).item_name, 'New test snack');
-  await fixture.query("UPDATE orders SET status='completed' WHERE id=$1", [placed.id]);
+  // The sheet sync query selects completed orders only once they are paid.
+  await fixture.query("UPDATE orders SET status='completed', payment_status='paid' WHERE id=$1", [placed.id]);
   assert.equal((await fixture.query(queries.COMPLETED_ORDERS_QUERY)).rows.find(row => row.order_id === placed.id).item_name, 'New test snack');
 });
 

@@ -412,6 +412,25 @@ export function deliveryDateLabel(dateStr) {
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/* Small label so staff can tell fried and frozen variants of a snack apart. */
+export function SnackTypeBadge({ category }) {
+  if (category === "fried") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-orange-300 bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-700">
+        <Flame className="h-3 w-3" aria-hidden="true" /> Fried
+      </span>
+    );
+  }
+  if (category === "frozen") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-sky-300 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-700">
+        <Snowflake className="h-3 w-3" aria-hidden="true" /> Frozen
+      </span>
+    );
+  }
+  return null;
+}
+
 /* Shared mapper: raw API order row -> frontend order object. */
 function mapOrder(o) {
   return {
@@ -438,7 +457,7 @@ function mapOrder(o) {
       deliveryDate: o.delivery_date,
       deliverySlot: o.delivery_slot,
     },
-    items: o.items.map((i) => ({ id: i.id, name: formatItemName(i.name), qty: Number(i.qty), price: Number(i.price) })),
+    items: o.items.map((i) => ({ id: i.id, name: formatItemName(i.name), qty: Number(i.qty), price: Number(i.price), category: i.category || null })),
   };
 }
 
