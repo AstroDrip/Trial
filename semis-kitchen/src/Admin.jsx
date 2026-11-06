@@ -1343,17 +1343,17 @@ export default function Admin() {
                           <div>
                             <h3 className="text-sm text-green-950">{item.name}</h3>
                             <div className="text-xs text-green-800/50">{item.unit}</div>
-                            {isDraft && <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Draft</span>}
+                            {isDraft && <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Unpublished</span>}
                           </div>
                           <button
                             onClick={() => toggleAvailability(item.id)}
                             disabled={isDraft && (!(Number(currentPrice) > 0) || available)}
-                            aria-label={isDraft ? "Enable item" : undefined}
+                            aria-label={`${available ? "Pause production for" : "Make production available"} ${item.name}`}
                             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors shrink-0 ${
                               available ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-600"
                             } disabled:cursor-not-allowed disabled:opacity-40`}
                           >
-                            {isDraft ? "Enable item" : available ? "Production available" : "Production paused"}
+                            {available ? "Production available" : "Production paused"}
                           </button>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">

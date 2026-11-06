@@ -333,6 +333,15 @@ export async function updateItem(id, fields, revision) {
   return (await parseApiResponse(res, "Unable to update item")).data;
 }
 
+export async function setItemPublished(id, published, revision) {
+  const res = await adminRequest(`/items/${encodeURIComponent(id)}/publication`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "If-Match": `"${revision}"` },
+    body: JSON.stringify({ published }),
+  });
+  return (await parseApiResponse(res, "Unable to update publication status")).data;
+}
+
 export async function retireItem(id, revision) {
   const res = await adminRequest(`/items/${encodeURIComponent(id)}`, {
     method: "DELETE",

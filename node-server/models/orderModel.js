@@ -146,10 +146,10 @@ function followsQuantityRule(qty, minQty, stepQty) {
 
 async function priceItems(client, requestedItems) {
   const result = await client.query(
-    `SELECT mi.id, mi.name, mi.category_id, mi.min_qty, mi.step_qty,
+    `SELECT mi.id, mi.name, mi.category_id, mi.min_qty, mi.step_qty, mi.is_draft,
             i.selling_price, i.available
        FROM menu_items mi JOIN inventory i ON i.menu_item_id = mi.id
-      WHERE mi.id = ANY($1::text[]) AND NOT mi.retired AND NOT mi.is_draft FOR SHARE OF mi, i`,
+      WHERE mi.id = ANY($1::text[]) AND NOT mi.retired FOR SHARE OF mi, i`,
     [requestedItems.map((item) => item.id)]
   );
   const catalog = new Map(result.rows.map((row) => [String(row.id), row]));
@@ -158,7 +158,9 @@ async function priceItems(client, requestedItems) {
   const authoritativeItems = [];
   for (const requested of requestedItems) {
     const row = catalog.get(requested.id);
-    if (!row.available) throw orderError(`${row.name} is currently unavailable. Please remove it from your cart.`);
+    // Pausing production also unpublishes an item, so an unpublished item is
+    // reported the same way as a paused one: clearly, by name.
+    if (!row.available || row.is_draft) throw orderError(`${row.name} is currently unavailable. Please remove it from your cart.`);
     const minQty = Number(row.min_qty) || 1;
     const stepQty = Number(row.step_qty) || 1;
     const price = Number(row.selling_price);

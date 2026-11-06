@@ -56,13 +56,34 @@ test('new items are drafts until priced and explicitly enabled in Inventory', as
   }
   assert.equal((await data(await call('/menu/admin'))).some(row => row.id === created.id), true);
   assert.equal((await data(await call('/inventory/admin'))).some(row => row.menu_item_id === created.id), true);
-  await assert.rejects(orders.createOrder(orderInput(created.id)), /no longer exist|not available/);
+  await assert.rejects(orders.createOrder(orderInput(created.id)), /no longer exist|unavailable/);
+  assert.equal((await call(`/items/${created.id}/publication`, 'PUT', { published: true }, created.revision, false)).status, 401);
+  assert.equal((await call(`/items/${created.id}/publication`, 'PUT', { published: true }, created.revision)).status, 400);
   assert.equal((await call(`/inventory/${created.id}`, 'PUT', { available: true })).status, 400);
   await data(await call(`/inventory/${created.id}`, 'PUT', { price: 20 }));
   assert.equal((await data(await call('/menu'))).some(row => row.id === created.id), false);
   await data(await call(`/inventory/${created.id}`, 'PUT', { available: true }));
   assert.equal((await data(await call('/menu'))).some(row => row.id === created.id), true);
   created = (await data(await call('/items'))).find(row => row.id === created.id);
+
+  const unpublished = await data(await call(`/items/${created.id}/publication`, 'PUT', { published: false }, created.revision));
+  assert.equal(unpublished.isDraft, true);
+  assert.equal((await data(await call('/inventory/admin'))).find(row => row.menu_item_id === created.id).available, false);
+  assert.equal((await data(await call('/menu'))).some(row => row.id === created.id), false);
+  assert.equal((await call(`/items/${created.id}/publication`, 'PUT', { published: true }, created.revision)).status, 409);
+  created = await data(await call(`/items/${created.id}/publication`, 'PUT', { published: true }, unpublished.revision));
+  assert.equal(created.isDraft, false);
+  assert.equal((await data(await call('/inventory/admin'))).find(row => row.menu_item_id === created.id).available, true);
+  assert.equal((await data(await call('/menu'))).some(row => row.id === created.id), true);
+
+  await data(await call(`/inventory/${created.id}`, 'PUT', { available: false }));
+  created = (await data(await call('/items'))).find(row => row.id === created.id);
+  assert.equal(created.isDraft, true);
+  assert.equal((await data(await call('/menu'))).some(row => row.id === created.id), false);
+  await data(await call(`/inventory/${created.id}`, 'PUT', { available: true }));
+  created = (await data(await call('/items'))).find(row => row.id === created.id);
+  assert.equal(created.isDraft, false);
+  assert.equal((await data(await call('/menu'))).some(row => row.id === created.id), true);
 });
 
 test('renames preserve original names in order lists, replay, PDF query and Sheets query', async () => {
